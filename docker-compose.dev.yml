@@ -1,0 +1,143 @@
+# =============================================================================
+# docker-compose.dev.yml — Full local development stack
+# Extends the infrastructure compose with the API + Celery worker services.
+#
+# Usage:
+#   docker compose -f infrastructure/docker/docker-compose.yml \
+#                  -f docker-compose.dev.yml up --build
+# =============================================================================
+
+version: "3.9"
+
+networks:
+  autofill_net:
+    external: true   # created by infrastructure/docker/docker-compose.yml
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend — hot-reload in dev via watchfiles
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder            # Use builder stage in dev (has build tools)
+    container_name: autofill_api
+    restart: unless-stopped
+    # Override CMD for dev: uvicorn with --reload
+    command: >
+      uvicorn backend.api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /app/backend
+      --log-level debug
+    volumes:
+      - ./backend:/app/backend:ro   # Mount source for hot-reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./infrastructure/docker/.env
+    environment:
+      APP_ENV: development
+      DEBUG: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - autofill_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Celery worker — resume parsing queue
+  # ---------------------------------------------------------------------------
+  celery_parsing:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    container_name: autofill_celery_parsing
+    restart: unless-stopped
+    command: >
+      celery -A backend.api.workers.tasks.celery_app worker
+      --loglevel=info
+      --queues=parsing
+      --concurrency=2
+      --hostname=parsing@%h
+    volumes:
+      - ./backend:/app/backend:ro
+    env_file:
+      - ./infrastructure/docker/.env
+    environment:
+      APP_ENV: development
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - autofill_net
+
+  # ---------------------------------------------------------------------------
+  # Celery worker — embedding ingestion queue
+  # ---------------------------------------------------------------------------
+  celery_ingestion:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    container_name: autofill_celery_ingestion
+    restart: unless-stopped
+    command: >
+      celery -A backend.api.workers.tasks.celery_app worker
+      --loglevel=info
+      --queues=ingestion
+      --concurrency=4
+      --hostname=ingestion@%h
+    volumes:
+      - ./backend:/app/backend:ro
+    env_file:
+      - ./infrastructure/docker/.env
+    environment:
+      APP_ENV: development
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - autofill_net
+
+  # ---------------------------------------------------------------------------
+  # Flower — Celery task monitoring UI
+  # ---------------------------------------------------------------------------
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    container_name: autofill_flower
+    restart: unless-stopped
+    command: >
+      celery -A backend.api.workers.tasks.celery_app flower
+      --port=5555
+      --basic_auth=admin:flower_secret
+    ports:
+      - "5555:5555"
+    env_file:
+      - ./infrastructure/docker/.env
+    depends_on:
+      - redis
+    networks:
+      - autofill_net

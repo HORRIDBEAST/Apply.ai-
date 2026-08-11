@@ -1,0 +1,32 @@
+# Qdrant production config for local dev
+# Mounted at /qdrant/config/production.yaml
+
+service:
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: 6334
+  max_request_size_mb: 32
+
+storage:
+  # Where vectors and payloads are persisted
+  storage_path: /qdrant/storage
+
+  # Write-ahead log for durability
+  wal:
+    wal_capacity_mb: 32
+    wal_segments_ahead: 0
+
+  # Snapshot config
+  snapshots_path: /qdrant/snapshots
+
+  # Performance — on-disk payload index
+  on_disk_payload: false
+
+  # HNSW index defaults
+  hnsw_index:
+    m: 16
+    ef_construct: 100
+    
+    on_disk: false
+
+log_level: INFO

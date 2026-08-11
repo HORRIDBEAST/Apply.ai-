@@ -1,0 +1,58 @@
+# backend/requirements.txt
+# Pin minor versions; patch versions float for security fixes.
+# Install with: pip install -r requirements.txt
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]          # ASGI server with uvloop + httptools
+gunicorn                      # Production process manager
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]
+asyncpg                     # Async PostgreSQL driver
+alembic                     # Database migrations
+psycopg2-binary              # Sync driver (used by Alembic offline mode)
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis[hiredis]               # Async Redis client with C parser
+
+# ── Qdrant ────────────────────────────────────────────────────────────────────
+qdrant-client
+
+# ── AI / LLM ──────────────────────────────────────────────────────────────────
+openai                      # Async OpenAI client
+tiktoken                     # Fast BPE tokeniser (chunk size counting)
+llama-index-core            # LlamaIndex core (agents built in Step 3)
+llama-index-llms-openai
+llama-index-embeddings-openai
+
+# ── Task queue ────────────────────────────────────────────────────────────────
+celery[redis]
+kombu                        # Celery's messaging library
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+python-jose[cryptography]    # JWT decode / JWKS
+httpx                       # Async HTTP client (JWKS fetch)
+
+# ── File handling ─────────────────────────────────────────────────────────────
+boto3                       # S3-compatible storage (MinIO / AWS S3)
+python-multipart             # FastAPI file upload support
+pypdf                        # PDF text extraction
+python-docx                  # DOCX text extraction
+
+# ── Encryption ────────────────────────────────────────────────────────────────
+cryptography                  # AES-256-GCM resume encryption
+
+# ── Settings & validation ─────────────────────────────────────────────────────
+pydantic
+pydantic-settings
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+structlog
+sentry-sdk[fastapi]
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest
+pytest-asyncio
+httpx==0.27.*                       # AsyncClient for FastAPI TestClient
+factory-boy                  # Test fixture factories

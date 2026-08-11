@@ -1,0 +1,985 @@
+{
+  "info": {
+    "name": "Job Autofill Copilot — Full E2E Test Suite",
+    "description": "Complete end-to-end test collection for all backend API endpoints.\n\nIMPORTANT: Run requests in folder order (Health → Users → Resumes → Templates → Applications → AI Agents).\n\nCollection variables are auto-set by test scripts — you only need to set OPENAI_API_KEY and CLERK_TOKEN before running.\n\nSee README tab for setup instructions.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "autofill-copilot-v1"
+  },
+  "variable": [
+    { "key": "base_url",           "value": "http://localhost:8000/api/v1",  "type": "string" },
+    { "key": "clerk_token",        "value": "PASTE_YOUR_CLERK_JWT_HERE",     "type": "string" },
+    { "key": "resume_id",          "value": "",                              "type": "string" },
+    { "key": "template_id",        "value": "",                              "type": "string" },
+    { "key": "application_id",     "value": "",                              "type": "string" },
+    { "key": "job_description_id", "value": "",                              "type": "string" },
+    { "key": "answer_id",          "value": "",                              "type": "string" },
+    { "key": "form_field_id",      "value": "",                              "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{clerk_token}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "01 — Health Checks",
+      "item": [
+        {
+          "name": "Liveness probe",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Response body', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.status).to.eql('alive');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/health/live",
+            "description": "Kubernetes liveness probe — always 200 if the process is running."
+          }
+        },
+        {
+          "name": "Readiness probe (checks Postgres + Redis + Qdrant)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('All dependencies healthy', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.status).to.eql('ready');",
+                "  pm.expect(json.checks.postgres).to.be.true;",
+                "  pm.expect(json.checks.redis).to.be.true;",
+                "  pm.expect(json.checks.qdrant).to.be.true;",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/health/ready",
+            "description": "Returns 503 if any dependency is down."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "02 — Users",
+      "item": [
+        {
+          "name": "Sync user from Clerk (webhook simulation)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Synced', () => {",
+                "  pm.expect(pm.response.json().status).to.eql('synced');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/users/sync",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"user.created\",\n  \"data\": {\n    \"id\": \"user_test_clerk_001\",\n    \"email_addresses\": [{\"id\": \"email_001\", \"email_address\": \"testuser@autofill.dev\"}],\n    \"first_name\": \"Jane\",\n    \"last_name\": \"Doe\",\n    \"image_url\": \"https://example.com/avatar.png\"\n  }\n}"
+            },
+            "description": "Simulates a Clerk webhook on user sign-up. Creates the internal user record."
+          }
+        },
+        {
+          "name": "Get my profile (requires auth)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Has required fields', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('id');",
+                "  pm.expect(json).to.have.property('email');",
+                "  pm.expect(json).to.have.property('plan_tier');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/me",
+            "description": "Returns the authenticated user's profile. Requires valid Bearer token."
+          }
+        },
+        {
+          "name": "Update profile (display_name + preferences)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Name updated', () => {",
+                "  pm.expect(pm.response.json().display_name).to.eql('Jane Doe');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/users/me",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"Jane Doe\",\n  \"preferences\": {\n    \"timezone\": \"America/New_York\",\n    \"autofill_enabled\": true,\n    \"default_language\": \"en\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "03 — Resumes",
+      "item": [
+        {
+          "name": "Upload resume (PDF)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.test('Resume created', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('id');",
+                "  pm.expect(json.parse_status).to.be.oneOf(['pending', 'processing', 'complete']);",
+                "  pm.collectionVariables.set('resume_id', json.id);",
+                "  console.log('resume_id set to:', json.id);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/resumes/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "⚠️ Select a real PDF/DOCX resume file from your computer"
+                }
+              ]
+            },
+            "description": "Upload an encrypted resume file. The file is stored in MinIO (S3) and a Celery task is dispatched to parse it.\n\n⚠️ You MUST select an actual PDF/DOCX file in the 'file' form-data field."
+          }
+        },
+        {
+          "name": "List all resumes",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Returns array', () => {",
+                "  pm.expect(pm.response.json()).to.be.an('array');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/resumes/"
+          }
+        },
+        {
+          "name": "Get resume detail (with parsed data)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Has resume fields', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('id');",
+                "  pm.expect(json).to.have.property('parse_status');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/resumes/{{resume_id}}",
+            "description": "Returns resume metadata. If parse_status=complete, also includes parsed_data JSON."
+          }
+        },
+        {
+          "name": "Set resume as primary",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('is_primary = true', () => {",
+                "  pm.expect(pm.response.json().is_primary).to.be.true;",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/resumes/{{resume_id}}/set-primary"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "04 — Templates",
+      "item": [
+        {
+          "name": "Create template (SWE - Remote)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.test('Template created', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('id');",
+                "  pm.collectionVariables.set('template_id', json.id);",
+                "  console.log('template_id set to:', json.id);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/templates/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Senior SWE — Remote\",\n  \"description\": \"Template for senior software engineer remote roles\",\n  \"is_default\": true,\n  \"answers_json\": {\n    \"first_name\": \"Jane\",\n    \"last_name\": \"Doe\",\n    \"email\": \"jane@example.com\",\n    \"phone\": \"+1-555-0100\",\n    \"linkedin_url\": \"https://linkedin.com/in/janedoe\",\n    \"github_url\": \"https://github.com/janedoe\",\n    \"portfolio_url\": \"https://janedoe.dev\",\n    \"current_location\": \"San Francisco, CA\",\n    \"willing_to_relocate\": false,\n    \"visa_sponsorship_required\": false,\n    \"salary_expectation\": \"180000\",\n    \"notice_period_days\": 14,\n    \"years_experience\": \"8\",\n    \"cover_letter\": \"I am a passionate software engineer with 8 years of experience building scalable distributed systems. I excel at designing elegant solutions to complex problems and love working in collaborative environments that value both technical excellence and product impact.\",\n    \"why_us\": \"I am drawn to companies that are solving hard technical challenges at scale and value engineering culture. Your open-source contributions and commitment to developer tooling resonate strongly with my own values.\",\n    \"about_yourself\": \"I am a software engineer specialising in backend systems, distributed databases, and API design. I have led teams of up to 6 engineers and have a track record of shipping reliable systems that serve millions of users.\",\n    \"strengths\": \"My core strengths are systems design, mentoring junior engineers, and balancing technical debt with feature velocity.\",\n    \"custom_qa\": [\n      {\n        \"question\": \"Describe a challenging technical problem you solved.\",\n        \"answer\": \"At my previous company, I redesigned our event-streaming pipeline to handle 10x traffic spikes without dropping messages. I replaced a synchronous fanout with an async pub-sub model using Kafka, reducing p99 latency from 800ms to 45ms.\"\n      },\n      {\n        \"question\": \"How do you handle disagreements with teammates?\",\n        \"answer\": \"I believe in data-driven discussions. I present my reasoning clearly, listen actively to the other perspective, and try to find an experiment or prototype we can run to validate the best approach.\"\n      }\n    ]\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "List all templates",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Non-empty array', () => {",
+                "  pm.expect(pm.response.json()).to.be.an('array').with.length.above(0);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/templates/"
+          }
+        },
+        {
+          "name": "Get template by ID",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Has answers_json', () => {",
+                "  pm.expect(pm.response.json()).to.have.property('answers_json');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/templates/{{template_id}}"
+          }
+        },
+        {
+          "name": "Update template (add new custom_qa)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/templates/{{template_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Senior SWE — Remote (Updated)\",\n  \"answers_json\": {\n    \"first_name\": \"Jane\",\n    \"last_name\": \"Doe\",\n    \"email\": \"jane@example.com\",\n    \"phone\": \"+1-555-0100\",\n    \"linkedin_url\": \"https://linkedin.com/in/janedoe\",\n    \"github_url\": \"https://github.com/janedoe\",\n    \"salary_expectation\": \"195000\",\n    \"cover_letter\": \"I am a passionate software engineer with 8 years of experience building scalable distributed systems.\",\n    \"why_us\": \"Your engineering culture and commitment to open source deeply align with my values.\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Set template as default",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('is_default = true', () => {",
+                "  pm.expect(pm.response.json().is_default).to.be.true;",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/templates/{{template_id}}/set-default"
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "05 — Applications",
+      "item": [
+        {
+          "name": "Create application session (form detected)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.test('Application created', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.status).to.eql('detected');",
+                "  pm.collectionVariables.set('application_id', json.id);",
+                "  console.log('application_id set to:', json.id);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/applications/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\",\n  \"platform\": \"greenhouse\",\n  \"apply_url\": \"https://boards.greenhouse.io/exampleco/jobs/12345\",\n  \"session_meta\": {\n    \"extension_version\": \"0.1.0\",\n    \"browser\": \"Chrome/125\",\n    \"os\": \"macOS\"\n  }\n}"
+            },
+            "description": "Called by the browser extension the moment it detects a job application form."
+          }
+        },
+        {
+          "name": "List applications (paginated)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Pagination fields present', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('total');",
+                "  pm.expect(json).to.have.property('items');",
+                "  pm.expect(json.items).to.be.an('array');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/applications/?page=1&page_size=10",
+              "query": [
+                { "key": "page",      "value": "1" },
+                { "key": "page_size", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Filter applications by status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/applications/?status=detected&platform=greenhouse",
+              "query": [
+                { "key": "status",   "value": "detected" },
+                { "key": "platform", "value": "greenhouse" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get application detail (with answers)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Has expected fields', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('answers');",
+                "  pm.expect(json.answers).to.be.an('array');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/applications/{{application_id}}"
+          }
+        },
+        {
+          "name": "Bulk save field answers (after autofill)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.test('Answers saved', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.saved).to.be.above(0);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/applications/{{application_id}}/answers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answers\": [\n    {\n      \"form_field_id\": \"00000000-0000-0000-0000-000000000001\",\n      \"answer_text\": \"Jane\",\n      \"source\": \"template\",\n      \"confidence_score\": 1.0,\n      \"was_edited\": false\n    },\n    {\n      \"form_field_id\": \"00000000-0000-0000-0000-000000000002\",\n      \"answer_text\": \"Doe\",\n      \"source\": \"template\",\n      \"confidence_score\": 1.0,\n      \"was_edited\": false\n    },\n    {\n      \"form_field_id\": \"00000000-0000-0000-0000-000000000003\",\n      \"answer_text\": \"I am drawn to your company because of your commitment to engineering excellence and the impactful products you ship at scale.\",\n      \"source\": \"ai_generated\",\n      \"confidence_score\": 0.87,\n      \"was_edited\": true\n    }\n  ]\n}",
+              "description": "⚠️ Note: form_field_ids are placeholder UUIDs here. In real usage these come from the FormUnderstandingAgent response."
+            },
+            "description": "Sent by the extension after filling all detected fields."
+          }
+        },
+        {
+          "name": "Update application status → submitted",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Status updated', () => {",
+                "  pm.expect(pm.response.json().status).to.eql('submitted');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/applications/{{application_id}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"submitted\" }"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "06 — AI Agent: Form Understanding",
+      "item": [
+        {
+          "name": "Understand Greenhouse form HTML",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Fields detected', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.fields).to.be.an('array').with.length.above(0);",
+                "  pm.expect(json).to.have.property('platform_detected');",
+                "  pm.expect(json).to.have.property('ai_required_count');",
+                "  pm.expect(json.parsing_confidence).to.be.above(0);",
+                "  // Save first field id for later tests",
+                "  if (json.fields.length > 0) {",
+                "    console.log('First mapped_field:', json.fields[0].mapped_field);",
+                "    console.log('platform_detected:', json.platform_detected);",
+                "    console.log('ai_required_count:', json.ai_required_count);",
+                "  }",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/form/understand",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page_url\": \"https://boards.greenhouse.io/exampleco/jobs/12345\",\n  \"html\": \"<!DOCTYPE html><html><body><form id='application_form'><div class='field'><label for='first_name'>First Name *</label><input type='text' id='first_name' name='first_name' required placeholder='Jane' /></div><div class='field'><label for='last_name'>Last Name *</label><input type='text' id='last_name' name='last_name' required /></div><div class='field'><label for='email'>Email Address *</label><input type='email' id='email' name='email' required /></div><div class='field'><label for='phone'>Phone Number</label><input type='tel' id='phone' name='phone' /></div><div class='field'><label for='resume'>Resume / CV *</label><input type='file' id='resume' name='resume' accept='.pdf,.doc,.docx' required /></div><div class='field'><label for='linkedin_profile'>LinkedIn Profile URL</label><input type='url' id='linkedin_profile' name='linkedin_profile' /></div><div class='field'><label for='github_url'>GitHub URL</label><input type='url' id='github_url' name='github_url' /></div><div class='field'><label for='website'>Portfolio / Personal Website</label><input type='url' id='website' name='website' /></div><div class='field'><label for='location'>Current Location</label><input type='text' id='location' name='location' placeholder='City, State, Country' /></div><div class='field'><label for='salary_expectations'>Salary Expectations (USD)</label><input type='text' id='salary_expectations' name='salary_expectations' /></div><div class='field'><label for='cover_letter'>Cover Letter</label><textarea id='cover_letter' name='cover_letter' rows='8' placeholder='Tell us why you want to work here...'></textarea></div><div class='field'><label for='why_interested'>Why are you interested in this role and our company?</label><textarea id='why_interested' name='why_interested' rows='6'></textarea></div><div class='field'><label for='visa_sponsorship'>Do you require visa sponsorship?</label><select id='visa_sponsorship' name='visa_sponsorship'><option value=''>Select...</option><option value='yes'>Yes</option><option value='no'>No</option></select></div><div class='field'><label for='gender'>Gender (optional)</label><select id='gender' name='gender'><option value=''>Prefer not to say</option><option value='male'>Male</option><option value='female'>Female</option><option value='non_binary'>Non-binary</option></select></div></form></body></html>\"\n}"
+            },
+            "description": "Parses a simulated Greenhouse application form HTML.\n\nPhase 1 (heuristic) will resolve most fields instantly.\nPhase 2 (LLM) handles ambiguous ones.\n\nExpected: platform_detected=greenhouse, fields with first_name/last_name/email etc. mapped correctly, cover_letter and why_us marked as requires_ai=true."
+          }
+        },
+        {
+          "name": "Understand Workday form HTML",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/form/understand",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page_url\": \"https://company.myworkdayjobs.com/en-US/careers/job/Remote/Senior-Engineer_JR12345\",\n  \"html\": \"<html><body><form><div data-automation-id='firstName'><label>First Name</label><input type='text' aria-label='First Name' name='legalNameSection_firstName' /></div><div data-automation-id='lastName'><label>Last Name</label><input type='text' aria-label='Last Name' name='legalNameSection_lastName' /></div><div><label>Email</label><input type='email' aria-label='Email Address' name='email' /></div><div><label>Phone</label><input type='tel' aria-label='Phone Number' name='phone' /></div><div><label>LinkedIn Profile URL</label><input type='url' aria-label='LinkedIn URL' /></div><div><label>How did you hear about this position?</label><select aria-label='How did you hear about us'><option>LinkedIn</option><option>Company Website</option><option>Referral</option><option>Job Board</option></select></div><div><label>Why do you want to work at our company?</label><textarea aria-label='Why do you want to join us' rows='5'></textarea></div><div><label>Describe a significant technical achievement</label><textarea rows='5'></textarea></div></form></body></html>\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Understand Google Forms job application",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/form/understand",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page_url\": \"https://forms.google.com/d/e/123456/viewform\",\n  \"html\": \"<html><body><form><div class='freebirdFormviewerViewItemsItemItem'><div class='freebirdFormviewerViewItemsTextShortQuestion'><label>Full Name *</label><input type='text' aria-label='Full Name' required /></div></div><div class='freebirdFormviewerViewItemsItemItem'><label>Email Address *</label><input type='email' required /></div><div class='freebirdFormviewerViewItemsItemItem'><label>Current Company</label><input type='text' /></div><div class='freebirdFormviewerViewItemsItemItem'><label>Years of Experience</label><input type='text' /></div><div class='freebirdFormviewerViewItemsItemItem'><label>Tell us about yourself and why you are applying</label><textarea rows='6'></textarea></div></form></body></html>\"\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "07 — AI Agent: Answer Generation",
+      "item": [
+        {
+          "name": "Generate answer — Why do you want to work here?",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Answer structure valid', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('answer');",
+                "  pm.expect(json).to.have.property('confidence_score');",
+                "  pm.expect(json).to.have.property('answer_source');",
+                "  pm.expect(json).to.have.property('hallucination_flagged');",
+                "  pm.expect(json).to.have.property('context_sources');",
+                "  pm.expect(json.confidence_score).to.be.within(0, 1);",
+                "  console.log('Answer:', json.answer.substring(0, 150) + '...');",
+                "  console.log('Confidence:', json.confidence_score);",
+                "  console.log('Source:', json.answer_source);",
+                "  console.log('Hallucination flagged:', json.hallucination_flagged);",
+                "  console.log('Context sources used:', json.context_sources.length);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Why do you want to work here and why are you interested in this role?\",\n  \"field_key\": \"why_us\",\n  \"max_words\": 150,\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\"\n}"
+            },
+            "description": "The most critical endpoint. Retrieves context from Qdrant (resume + template + past answers) and generates a grounded answer.\n\nKey things to verify:\n- confidence_score > 0.5 means good context coverage\n- hallucination_flagged should be false\n- context_sources should list where the answer drew from\n- refusal_reason should be null if answer was generated"
+          }
+        },
+        {
+          "name": "Generate answer — Cover Letter",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Answer generated or refused gracefully', () => {",
+                "  const json = pm.response.json();",
+                "  const hasAnswer = json.answer && json.answer.length > 0;",
+                "  const hasRefusal = json.refusal_reason && json.refusal_reason.length > 0;",
+                "  pm.expect(hasAnswer || hasRefusal).to.be.true;",
+                "  if (hasAnswer) console.log('Answer length:', json.answer.length, 'chars');",
+                "  if (hasRefusal) console.log('Refused:', json.refusal_reason);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Please write a cover letter for this position.\",\n  \"field_key\": \"cover_letter\",\n  \"max_words\": 250,\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Generate answer — Tell us about yourself",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Tell us about yourself and your background.\",\n  \"field_key\": \"about_yourself\",\n  \"max_words\": 120,\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Generate answer — Describe a technical challenge",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Describe a significant technical challenge you have overcome.\",\n  \"field_key\": \"challenges\",\n  \"max_words\": 200,\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "HALLUCINATION TEST — empty context (expects refusal)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Zero-hallucination: empty context triggers refusal or low confidence', () => {",
+                "  const json = pm.response.json();",
+                "  const isRefused = json.refusal_reason && json.refusal_reason.length > 0;",
+                "  const isLowConfidence = json.confidence_score < 0.3;",
+                "  pm.expect(isRefused || isLowConfidence).to.be.true;",
+                "  console.log('Refusal reason:', json.refusal_reason);",
+                "  console.log('Confidence:', json.confidence_score);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Why do you want to work here?\",\n  \"field_key\": \"why_us\",\n  \"template_id\": null,\n  \"resume_id\": null\n}",
+              "description": "Intentionally passes no context IDs. The agent MUST refuse or return very low confidence rather than hallucinating an answer."
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "08 — AI Agent: Batch Answer Generation",
+      "item": [
+        {
+          "name": "Generate batch — 4 questions from same form",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('All answers returned', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.answers).to.be.an('array').with.length(4);",
+                "  pm.expect(json).to.have.property('total_latency_ms');",
+                "  pm.expect(json).to.have.property('total_tokens');",
+                "  json.answers.forEach((item, i) => {",
+                "    pm.expect(item).to.have.property('result');",
+                "    pm.expect(item.result).to.have.property('confidence_score');",
+                "    console.log(`Q${i+1} [${item.field_key}] confidence: ${item.result.confidence_score}`);",
+                "  });",
+                "  console.log('Total latency:', json.total_latency_ms + 'ms');",
+                "  console.log('Total tokens:', json.total_tokens);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate-batch",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template_id\": \"{{template_id}}\",\n  \"resume_id\": \"{{resume_id}}\",\n  \"questions\": [\n    {\n      \"question\": \"Why do you want to work at our company?\",\n      \"field_key\": \"why_us\",\n      \"max_words\": 150\n    },\n    {\n      \"question\": \"Tell us about yourself.\",\n      \"field_key\": \"about_yourself\",\n      \"max_words\": 100\n    },\n    {\n      \"question\": \"What are your greatest strengths?\",\n      \"field_key\": \"strengths\",\n      \"max_words\": 80\n    },\n    {\n      \"question\": \"Describe a challenging technical problem you solved.\",\n      \"field_key\": \"challenges\",\n      \"max_words\": 200\n    }\n  ]\n}"
+            },
+            "description": "Single API call for an entire form's open-text questions.\nContext is retrieved ONCE and shared across all questions — much more efficient than 4 sequential calls."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "09 — AI Agent: Memory (Past Answers)",
+      "item": [
+        {
+          "name": "Record answer in memory (after submission)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.test('Answer recorded', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.status).to.eql('recorded');",
+                "  pm.expect(json.point_ids).to.be.an('array');",
+                "  console.log('Qdrant point_ids:', json.point_ids);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/memory/record",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answer_text\": \"I am deeply impressed by your company's commitment to open-source infrastructure and the engineering culture you have built. Having worked on distributed systems at scale for 8 years, I believe I can contribute meaningfully to your platform reliability team while continuing to grow alongside world-class engineers.\",\n  \"question_label\": \"Why do you want to work at our company?\",\n  \"application_answer_id\": \"00000000-0000-0000-0000-000000000099\",\n  \"application_id\": \"{{application_id}}\",\n  \"form_field_key\": \"why_us\",\n  \"answer_source\": \"ai_generated\"\n}"
+            },
+            "description": "Records a submitted answer into the Qdrant past_answers collection.\nFuture answer generation calls will retrieve this as context via RAG."
+          }
+        },
+        {
+          "name": "Search memory — similar past answers",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Memory search result structure', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json).to.have.property('similar_answers');",
+                "  pm.expect(json).to.have.property('total_found');",
+                "  pm.expect(json.similar_answers).to.be.an('array');",
+                "  json.similar_answers.forEach((item, i) => {",
+                "    console.log(`Match ${i+1} [score: ${item.score}]:`, item.answer_text.substring(0, 80) + '...');",
+                "  });",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/memory/search",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Why are you interested in joining our engineering team?\",\n  \"top_k\": 5,\n  \"score_threshold\": 0.65\n}"
+            },
+            "description": "Embeds the question and finds the most semantically similar past answers from Qdrant.\nAfter running '09.1 Record answer', this should return that answer as a match."
+          }
+        },
+        {
+          "name": "Search memory — different question (low similarity expected)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Similarity gating works', () => {",
+                "  const json = pm.response.json();",
+                "  // A question about hobbies should not match a 'why us' answer",
+                "  console.log('Results for unrelated question:', json.total_found);",
+                "  json.similar_answers.forEach(a => {",
+                "    pm.expect(a.score).to.be.above(0.65); // only high-confidence matches returned",
+                "  });",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/memory/search",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What are your hobbies outside of work?\",\n  \"top_k\": 5,\n  \"score_threshold\": 0.65\n}",
+              "description": "Tests that the threshold filter works correctly — unrelated questions should not match past answers."
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "10 — Error Handling & Edge Cases",
+      "item": [
+        {
+          "name": "Missing auth token (expects 401/403)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Auth required', () => {",
+                "  pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/users/me"
+          }
+        },
+        {
+          "name": "Non-existent resume ID (expects 404)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('404 returned', () => pm.response.to.have.status(404));"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/resumes/00000000-0000-0000-0000-000000000000"
+          }
+        },
+        {
+          "name": "Malformed UUID (expects 422)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('422 returned', () => pm.response.to.have.status(422));",
+                "pm.test('Validation error shape', () => {",
+                "  const json = pm.response.json();",
+                "  pm.expect(json.error.code).to.eql('VALIDATION_ERROR');",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/resumes/not-a-valid-uuid"
+          }
+        },
+        {
+          "name": "Batch generation — too many questions (expects 422)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('422 for over-limit batch', () => {",
+                "  pm.expect(pm.response.code).to.be.oneOf([422, 400]);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/agents/answers/generate-batch",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"questions\": [\n    {\"question\": \"Q1\"}, {\"question\": \"Q2\"}, {\"question\": \"Q3\"}, {\"question\": \"Q4\"}, {\"question\": \"Q5\"},\n    {\"question\": \"Q6\"}, {\"question\": \"Q7\"}, {\"question\": \"Q8\"}, {\"question\": \"Q9\"}, {\"question\": \"Q10\"},\n    {\"question\": \"Q11\"}, {\"question\": \"Q12\"}, {\"question\": \"Q13\"}, {\"question\": \"Q14\"}, {\"question\": \"Q15\"},\n    {\"question\": \"Q16\"}, {\"question\": \"Q17\"}, {\"question\": \"Q18\"}, {\"question\": \"Q19\"}, {\"question\": \"Q20\"},\n    {\"question\": \"Q21 — this exceeds the limit of 20\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Upload non-resume file type (expects 415)",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('415 Unsupported Media Type', () => {",
+                "  pm.expect(pm.response.code).to.be.oneOf([415, 422]);",
+                "});"
+              ],
+              "type": "text/javascript"
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/resumes/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [{
+                "key": "file",
+                "type": "file",
+                "src": [],
+                "description": "Upload a .png or .txt file here to trigger the 415 error"
+              }]
+            },
+            "description": "Upload a non-PDF/DOCX file. Should get 415 Unsupported Media Type."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "11 — Cleanup",
+      "item": [
+        {
+          "name": "Delete resume",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"]
+            }
+          }],
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/resumes/{{resume_id}}"
+          }
+        },
+        {
+          "name": "Delete template",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": ["pm.test('204 No Content', () => pm.response.to.have.status(204));"]
+            }
+          }],
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/templates/{{template_id}}"
+          }
+        }
+      ]
+    }
+  ]
+}
