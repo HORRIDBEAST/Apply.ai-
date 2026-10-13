@@ -1,112 +1,175 @@
-# Job Autofill Copilot
+<div align="center">
 
-An AI-powered job application autofill system. Install a browser extension, upload your resume once, build a template of your standard answers, and the system automatically detects job application forms across the web, maps every field, and generates grounded answers using your own resume and past responses — with zero hallucination enforcement.
+# 🪄 Job Autofill Copilot
 
-## What this project does
+### AI-powered job application autofill — zero hallucination, fully grounded.
 
-- **Resume parsing** — Upload a PDF or DOCX resume. The ResumeExtractorAgent extracts structured data (name, skills, experience, education) using GPT-4o with strict source-only constraints.
-- **Form understanding** — The FormUnderstandingAgent takes raw HTML from any job application page and maps every field to a canonical key (`first_name`, `cover_letter`, `why_us`, etc.) using a two-phase heuristic + LLM pipeline. Detects 18 ATS platforms including Greenhouse, Lever, Workday, and Google Forms.
-- **AI answer generation** — The AnswerGenerationAgent retrieves context from your resume, templates, job description, and past answers via Qdrant RAG, then generates grounded answers. It refuses to answer if context is insufficient rather than hallucinating.
-- **Application memory** — Every submitted answer is embedded and stored in Qdrant. Future applications retrieve similar past answers as context, improving over time.
-- **Application history** — Every form session is tracked in PostgreSQL with status, platform, field counts, and all answers with their source and confidence score.
-- **Browser extension** — Plasmo + TypeScript extension that scans the DOM, sends HTML to the backend, receives field mappings and AI answers, and injects them into the live page (built, not yet connected end-to-end with auth).
+Upload your résumé once, write your standard answers, and let the system detect job forms across the web, map every field, and generate answers grounded in *your own data* — refusing to invent facts it can't source.
 
-## Architecture
+[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org)
+[![Qdrant](https://img.shields.io/badge/Qdrant-vector%20RAG-DC244C?style=flat-square)](https://qdrant.tech)
+[![Redis](https://img.shields.io/badge/Redis-cache%20%2B%20broker-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?style=flat-square&logo=openai&logoColor=white)](https://platform.openai.com)
+[![Plasmo](https://img.shields.io/badge/Plasmo-extension-7C3AED?style=flat-square)](https://plasmo.com)
+[![Backend](https://img.shields.io/badge/backend-tested%20%26%20working-22c55e?style=flat-square)]()
+[![Extension](https://img.shields.io/badge/extension-in%20progress-f59e0b?style=flat-square)]()
 
-Browser Extension (Plasmo + TypeScript)
-↓
-FastAPI Backend (Python 3.12, async)
-↓
-┌──────────────────────────────────────────┐
-│ AI Agent System (LlamaIndex + GPT-4o) │
-│ - ResumeExtractorAgent │
-│ - FormUnderstandingAgent │
-│ - AnswerGenerationAgent │
-│ - ApplicationMemoryAgent │
-└──────────────────────────────────────────┘
-↓
-┌──────────────────────────────────────────┐
-│ Data Layer │
-│ PostgreSQL — relational data │
-│ Qdrant — vector embeddings (RAG) │
-│ Redis — cache + Celery broker │
-│ MinIO — encrypted resume files │
-└──────────────────────────────────────────┘
+</div>
 
-## Project structure
+---
 
+## ✨ What this project does
+
+| | |
+|---|---|
+| 📄 **Resume parsing** | Upload a PDF or DOCX résumé. `ResumeExtractorAgent` extracts structured data (name, skills, experience, education, projects, coding profiles) using GPT-4o-mini with strict source-only constraints — plus real PDF hyperlink recovery for GitHub/LinkedIn/portfolio links. |
+| 🧩 **Form understanding** | `FormUnderstandingAgent` takes raw HTML from any job application page and maps every field to a canonical key (`first_name`, `cover_letter`, `why_us`, etc.) via a two-phase heuristic + LLM pipeline. Detects 18 ATS platforms — Greenhouse, Lever, Workday, Google Forms, and more. |
+| 🧠 **AI answer generation** | `AnswerGenerationAgent` retrieves context from your résumé, templates, job description, and past answers via Qdrant RAG, then generates grounded answers — refusing to answer rather than hallucinating when context is insufficient. |
+| 🔁 **Application memory** | Every submitted answer is embedded and stored in Qdrant. Future applications retrieve similar past answers as context, improving over time. |
+| 📊 **Application history** | Every form session is tracked in PostgreSQL with status, platform, field counts, and all answers with their source and confidence score. |
+| 🧷 **Browser extension** | Plasmo + TypeScript extension that scans the DOM, sends HTML to the backend, receives field mappings and AI answers, and injects them into the live page *(built, not yet connected end-to-end with auth)*. |
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    EXT["🧩 Browser Extension<br/><sub>Plasmo + TypeScript</sub>"]
+
+    subgraph API["⚙️ FastAPI Backend — Python 3.12, async"]
+        ROUTERS["Routers<br/><sub>users · resumes · templates · applications · agents</sub>"]
+    end
+
+    subgraph AGENTS["🧠 AI Agent System — LlamaIndex + GPT-4o"]
+        direction LR
+        A1["ResumeExtractor<br/>Agent"]
+        A2["FormUnderstanding<br/>Agent"]
+        A3["AnswerGeneration<br/>Agent"]
+        A4["ApplicationMemory<br/>Agent"]
+    end
+
+    subgraph DATA["🗄️ Data Layer"]
+        direction LR
+        PG[("PostgreSQL<br/><sub>relational data</sub>")]
+        QD[("Qdrant<br/><sub>vector embeddings — RAG</sub>")]
+        RD[("Redis<br/><sub>cache + Celery broker</sub>")]
+        MN[("MinIO<br/><sub>encrypted résumé files</sub>")]
+    end
+
+    EXT -->|HTTPS + Clerk JWT| ROUTERS
+    ROUTERS --> AGENTS
+    AGENTS --> PG
+    AGENTS --> QD
+    ROUTERS --> RD
+    ROUTERS --> MN
+
+    classDef client fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
+    classDef api fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#713f12
+    classDef agent fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+    classDef data fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+
+    class EXT client
+    class ROUTERS api
+    class A1,A2,A3,A4 agent
+    class PG,QD,RD,MN data
+
+    style API fill:#fffbea,stroke:#eab308,stroke-width:1.5px
+    style AGENTS fill:#f5f3ff,stroke:#8b5cf6,stroke-width:1.5px
+    style DATA fill:#f0fdf4,stroke:#22c55e,stroke-width:1.5px
+```
+
+## 🌳 Project structure
+
+> 💡 Paths below reflect what's **actually on disk** (confirmed during backend
+> testing) — a few differ from older docs/scaffolding comments: `alembic.ini`
+> lives under `backend/api/`, not the project root; models live in `db/`, not
+> a separate `models/` package; the resumes router file is `resume.py`
+> (singular).
+
+```text
 job-autofill-copilot/
-├── .env ← secrets (never commit)
-├── alembic.ini ← database migration config
+├── 🔒 .env                           # secrets — never commit (gitignored)
 ├── pytest.ini
-├── infrastructure/
-│ └── docker/
-│ ├── docker-compose.yml ← Postgres, Redis, Qdrant, MinIO
-│ ├── .env.example
-│ └── postgres/init/
-│ └── 01_extensions.sql
-├── backend/
-│ ├── requirements.txt
-│ ├── init.py
-│ └── api/
-│ ├── main.py ← FastAPI app factory + lifespan
-│ ├── alembic/
-│ │ ├── env.py
-│ │ └── versions/
-│ │ └── 001_initial_schema.py
-│ ├── agents/ ← AI reasoning layer
-│ │ ├── base.py ← LlamaIndex bootstrap + output schemas
-│ │ ├── resume_extractor.py
-│ │ ├── form_understanding.py
-│ │ ├── answer_generation.py
-│ │ └── application_memory.py
-│ ├── core/
-│ │ ├── config.py ← Pydantic Settings (all env vars)
-│ │ ├── logging.py ← structlog structured logging
-│ │ └── auth.py ← Clerk JWT verification
-│ ├── db/
-│ │ ├── session.py ← async SQLAlchemy engine
-│ │ ├── redis_client.py ← async Redis pool
-│ │ └── qdrant_client.py ← Qdrant client + collection setup
-│ ├── middleware/
-│ │ ├── request_id.py
-│ │ └── error_handlers.py
-│ ├── models/
-│ │ ├── base.py ← DeclarativeBase + mixins
-│ │ └── models.py ← all 9 ORM tables
-│ ├── rag/
-│ │ ├── chunker.py ← text chunking for embeddings
-│ │ ├── embeddings.py ← OpenAI embedding with Redis cache
-│ │ ├── ingestion.py ← write side (embed + store in Qdrant)
-│ │ └── retrieval.py ← read side (semantic search)
-│ ├── routers/
-│ │ ├── health.py
-│ │ ├── users.py
-│ │ ├── resumes.py
-│ │ ├── templates.py
-│ │ ├── applications.py
-│ │ └── agents.py ← all 5 AI agent endpoints
-│ └── workers/
-│ └── tasks.py ← Celery async tasks (resume parsing)
-├── apps/
-│ └── extension/ ← Plasmo browser extension (TypeScript)
-│ ├── src/
-│ │ ├── background/index.ts ← service worker orchestrator
-│ │ ├── content.ts ← DOM scanner + injector trigger
-│ │ ├── popup.tsx ← extension popup UI
-│ │ ├── lib/
-│ │ │ ├── api-client.ts
-│ │ │ ├── platform-detector.ts
-│ │ │ ├── dom-scanner.ts
-│ │ │ ├── dom-injector.ts
-│ │ │ └── storage.ts
-│ │ └── types/index.ts
-│ └── package.json
-└── backend/tests/
-├── conftest.py
-└── test_all.py
+├── Job_Autofill_Copilot.postman_collection.json
+├── Job_Autofill_Copilot_Local.postman_environment.json
+│
+├── 🐳 infrastructure/
+│   └── docker/
+│       ├── docker-compose.yml       # Postgres · Redis · Qdrant · MinIO
+│       ├── .env.example
+│       └── postgres/init/01_extensions.sql
+│
+├── ⚙️ backend/
+│   ├── requirements.txt
+│   ├── venv/                        # (or project-root .venv — either works)
+│   ├── tests/
+│   │   ├── conftest.py
+│   │   └── test_all.py
+│   └── api/
+│       ├── main.py                  # FastAPI app factory + lifespan
+│       ├── alembic.ini              # ⚠️ lives here, not project root
+│       ├── alembic/
+│       │   ├── env.py
+│       │   └── versions/001_initial_schema.py
+│       │
+│       ├── 🧠 agents/               # AI reasoning layer
+│       │   ├── base.py              # LlamaIndex bootstrap + output schemas
+│       │   ├── resume_extractor.py
+│       │   ├── form_understanding.py
+│       │   ├── answer_generation.py
+│       │   └── application_memory.py
+│       │
+│       ├── core/
+│       │   ├── config.py            # Pydantic Settings — all env vars
+│       │   ├── logging.py           # structlog structured logging
+│       │   └── auth.py              # Clerk JWT verification
+│       │
+│       ├── 🗄️ db/
+│       │   ├── base.py              # DeclarativeBase + mixins
+│       │   ├── models.py            # all 9 ORM tables
+│       │   ├── session.py           # async SQLAlchemy engine
+│       │   ├── redis_client.py
+│       │   └── qdrant_client.py     # client + collection setup
+│       │
+│       ├── middleware/
+│       │   ├── request_id.py
+│       │   └── error_handlers.py
+│       │
+│       ├── 🔍 rag/
+│       │   ├── chunker.py           # text → embeddable chunks
+│       │   ├── embeddings.py        # OpenAI embeddings + Redis cache
+│       │   ├── ingestion.py         # write side — embed + store in Qdrant
+│       │   └── retrieval.py         # read side — semantic search
+│       │
+│       ├── routers/
+│       │   ├── health.py
+│       │   ├── users.py
+│       │   ├── resume.py            # (singular — not resumes.py)
+│       │   ├── templates.py
+│       │   ├── applications.py
+│       │   └── agents.py            # all 5 AI agent endpoints
+│       │
+│       └── workers/
+│           └── tasks.py             # Celery async tasks (resume parsing)
+│
+└── 🧩 apps/
+    └── extension/                   # Plasmo browser extension (TypeScript)
+        ├── package.json
+        └── src/
+            ├── background/index.ts  # service worker orchestrator
+            ├── content.ts           # DOM scanner + injector trigger
+            ├── popup.tsx            # extension popup UI
+            ├── lib/
+            │   ├── api-client.ts
+            │   ├── platform-detector.ts
+            │   ├── dom-scanner.ts
+            │   ├── dom-injector.ts
+            │   └── storage.ts
+            └── types/index.ts
+```
 
-## Requirements
+## 📋 Requirements
 
 | Tool | Version | Install |
 |------|---------|---------|
@@ -120,7 +183,7 @@ https://clerk.com — create an app, copy the Secret Key and Publishable Key.
 
 ---
 
-## Setup — new machine
+## 🚀 Setup — new machine
 
 ### 1. Clone
 
@@ -312,7 +375,7 @@ http://localhost:8000/docs
 
 ---
 
-## Testing with Postman
+## 🧪 Testing with Postman
 
 Import both files from the **project root** (not `backend/tests/` — that's
 where this doc originally pointed, but they actually live at the repo root):
@@ -354,7 +417,7 @@ Run the collection folders in order: Health → Users → Resumes → Templates 
 
 ---
 
-## Useful commands
+## 🛠️ Useful commands
 
 ```bash
 # Docker
@@ -380,7 +443,7 @@ alembic downgrade base && alembic upgrade head
 
 ---
 
-## What is not yet built
+## 🚧 What is not yet built
 
 - Web dashboard (Next.js) — application history UI, resume upload UI, template editor
 - Browser extension auth flow — Clerk sign-in inside the popup
@@ -392,7 +455,7 @@ alembic downgrade base && alembic upgrade head
 
 ---
 
-## Environment variables reference
+## 🔑 Environment variables reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -410,7 +473,7 @@ alembic downgrade base && alembic upgrade head
 
 ---
 
-## Security notes
+## 🛡️ Security notes
 
 - Resume files are encrypted with AES-256-GCM before being stored in MinIO
 - Auth tokens are verified against Clerk's JWKS on every request
@@ -420,7 +483,7 @@ alembic downgrade base && alembic upgrade head
 
 ---
 
-## Troubleshooting
+## 🧯 Troubleshooting
 
 ### Bugs found and fixed while first booting this backend (2026-09-30)
 
