@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from .agents import router as agents_router
 from .applications import router as applications_router
 from .health import router as health_router
-from .resumes import router as resumes_router
+from .resume import router as resumes_router
 from .templates import router as templates_router
 from .users import router as users_router
 

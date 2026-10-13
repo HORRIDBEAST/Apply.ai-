@@ -58,8 +58,9 @@ def configure_logging() -> None:
         stream=sys.stdout,
         level=log_level,
     )
-    # Silence noisy third-party loggers
-    for noisy in ("uvicorn.access", "httpx", "openai", "httpcore"):
+    # Silence noisy third-party loggers (but keep uvicorn.access so you can
+    # see each request hit during local development)
+    for noisy in ("httpx", "openai", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # ---- structlog processors --------------------------------------------

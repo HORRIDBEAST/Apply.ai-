@@ -106,3 +106,5 @@ infrastructure/**/volumes/
 !infrastructure/docker/.env.example
 !apps/**/.env.example
 !backend/**/.env.example
+
+templates_guide.md

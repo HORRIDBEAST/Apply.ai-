@@ -25,7 +25,7 @@ from backend.api.core.config import settings
 from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import get_qdrant
 from backend.api.db.session import get_db
-from backend.api.models.models import User
+from backend.api.db.models import User
 from backend.api.rag.ingestion import purge_user_vectors
 
 logger = get_logger(__name__)
@@ -116,7 +116,7 @@ async def clerk_webhook_sync(
         db.add(user)
 
     await db.commit()
-    logger.info("User synced from Clerk", clerk_user_id=data.id, event=payload.type)
+    logger.info("User synced from Clerk", clerk_user_id=data.id, webhook_event=payload.type)
     return {"status": "synced"}
 
 

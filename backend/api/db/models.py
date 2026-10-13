@@ -505,7 +505,7 @@ class JobDescription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
     platform: Mapped[ATSPlatform] = mapped_column(
-        Enum(ATSPlatform, name="ats_platform_enum"),
+        Enum(ATSPlatform, name="ats_platform_enum", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=ATSPlatform.UNKNOWN,
     )
@@ -585,7 +585,7 @@ class Application(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Detected ATS platform
     platform: Mapped[ATSPlatform] = mapped_column(
-        Enum(ATSPlatform, name="ats_platform_enum"),
+        Enum(ATSPlatform, name="ats_platform_enum", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=ATSPlatform.UNKNOWN,
     )
@@ -595,7 +595,7 @@ class Application(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         comment="URL where the application form was detected",
     )
     status: Mapped[ApplicationStatus] = mapped_column(
-        Enum(ApplicationStatus, name="application_status_enum"),
+        Enum(ApplicationStatus, name="application_status_enum", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=ApplicationStatus.DETECTED,
         index=True,
@@ -692,7 +692,7 @@ class FormField(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         comment="Canonical template key this field maps to",
     )
     field_type: Mapped[FieldType] = mapped_column(
-        Enum(FieldType, name="field_type_enum"),
+        Enum(FieldType, name="field_type_enum", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=FieldType.UNKNOWN,
     )
@@ -787,7 +787,7 @@ class ApplicationAnswer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Where the answer came from
     source: Mapped[AnswerSource] = mapped_column(
-        Enum(AnswerSource, name="answer_source_enum"),
+        Enum(AnswerSource, name="answer_source_enum", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=AnswerSource.TEMPLATE,
     )

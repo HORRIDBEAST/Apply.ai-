@@ -182,3 +182,22 @@ def create_app() -> FastAPI:
 # Application instance — imported by Uvicorn / Gunicorn
 # ---------------------------------------------------------------------------
 app = create_app()
+
+
+# ---------------------------------------------------------------------------
+# LOCAL TESTING ONLY — bypasses Clerk JWT verification.
+# Remove this block before deploying anywhere real auth is required.
+# ---------------------------------------------------------------------------
+if settings.APP_ENV == "development":
+    from backend.api.core.auth import verify_clerk_token, CurrentUser
+
+    async def _mock_auth() -> CurrentUser:
+        return CurrentUser(
+            user_id="00000000-0000-0000-0000-000000000001",
+            clerk_user_id="user_test_local",
+            email="test@autofill.dev",
+            plan_tier="pro",
+        )
+
+    app.dependency_overrides[verify_clerk_token] = _mock_auth
+    logger.warning("Clerk auth bypassed with mock user — LOCAL DEV ONLY")

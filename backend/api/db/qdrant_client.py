@@ -59,6 +59,10 @@ async def init_qdrant_client() -> None:
         host=settings.QDRANT_HOST,
         port=settings.QDRANT_PORT,
         api_key=settings.QDRANT_API_KEY,
+        # Local Docker Qdrant serves plain HTTP; qdrant-client defaults to
+        # HTTPS whenever an api_key is set (assumes Qdrant Cloud), which
+        # breaks the TLS handshake against a local instance.
+        https=False,
         # Use gRPC for lower latency in production if enabled
         prefer_grpc=settings.QDRANT_USE_GRPC,
         grpc_port=settings.QDRANT_GRPC_PORT,
@@ -181,7 +185,7 @@ async def _ensure_collections(client: AsyncQdrantClient) -> None:
                 collection_name=collection_name,
                 vectors_config=qmodels.VectorParams(
                     size=settings.QDRANT_VECTOR_SIZE,
-                    distance=qmodels.Distance[settings.QDRANT_DISTANCE],
+                    distance=qmodels.Distance(settings.QDRANT_DISTANCE),
                     on_disk=False,
                 ),
                 hnsw_config=_HNSW_CONFIG,

@@ -103,6 +103,13 @@ class EducationEntry(BaseModel):
     gpa: str | None = None
 
 
+class ProjectEntry(BaseModel):
+    name: str = ""
+    description: str = ""
+    technologies: list[str] = Field(default_factory=list)
+    url: str | None = None  # GitHub repo, live demo, etc.
+
+
 class ParsedResume(BaseModel):
     """
     Strict output schema for ResumeExtractorAgent.
@@ -120,8 +127,13 @@ class ParsedResume(BaseModel):
     skills: list[str] = Field(default_factory=list)
     experience: list[ExperienceEntry] = Field(default_factory=list)
     education: list[EducationEntry] = Field(default_factory=list)
+    projects: list[ProjectEntry] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
+    coding_profiles: list[str] = Field(
+        default_factory=list,
+        description="Competitive programming / coding platform handles, e.g. 'CodeChef: 3-star coder (Rating: 1689)'",
+    )
     # Extraction metadata
     confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
     extraction_warnings: list[str] = Field(default_factory=list)

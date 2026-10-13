@@ -28,7 +28,7 @@ from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import get_qdrant
 from backend.api.db.redis_client import get_redis
 from backend.api.db.session import get_db
-from backend.api.models.models import (
+from backend.api.db.models import (
     Application,
     ApplicationAnswer,
     ApplicationStatus,
@@ -232,7 +232,10 @@ async def update_application_status(
     app.status = body.status
     if body.status == ApplicationStatus.SUBMITTED:
         from datetime import datetime, timezone  # noqa: PLC0415
-        app.submitted_at = datetime.now(timezone.utc)
+        # submitted_at is a naive TIMESTAMP WITHOUT TIME ZONE column —
+        # asyncpg rejects a tz-aware value against it, so strip tzinfo
+        # after computing the UTC instant.
+        app.submitted_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     await db.commit()
     await db.refresh(app)

@@ -47,6 +47,7 @@ from backend.api.agents.base import (
 )
 from backend.api.agents.form_understanding import FormUnderstandingAgent
 from backend.api.core.auth import AuthenticatedUser
+from backend.api.core.config import settings
 from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import get_qdrant
 from backend.api.db.redis_client import get_redis
@@ -299,7 +300,13 @@ async def generate_batch_answers(
 class MemorySearchRequest(BaseModel):
     question: str = Field(..., min_length=1, description="Question to find similar past answers for")
     top_k: int = Field(default=5, ge=1, le=20)
-    score_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    # 0.70 was the original default here — unreachable in practice.
+    # Empirically (same text-embedding-3-small model as RAG retrieval),
+    # a genuinely matching past answer scores ~0.55-0.60 against a
+    # differently-phrased version of the same question, while an
+    # unrelated question stays below ~0.30. 0.35 separates the two
+    # cleanly without requiring every caller to override it manually.
+    score_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     exclude_application_id: uuid.UUID | None = Field(
         None,
         description="Exclude answers from this application (e.g. the current one)",

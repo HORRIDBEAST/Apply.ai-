@@ -68,16 +68,45 @@ def _make_chunk_id(
     source_id: str,
     source_type: str,
     chunk_index: int,
+    scope: str = "",
 ) -> uuid.UUID:
     """
     Generate a deterministic UUID for a chunk using SHA-256.
-    Produces the same UUID for the same (user, source, index) triple,
-    making Qdrant upserts idempotent.
+    Produces the same UUID for the same (user, source, scope, index)
+    quadruple, making Qdrant upserts idempotent.
+
+    `scope` disambiguates multiple independent chunk_text() calls against
+    the same source_id (e.g. a template's cover_letter field vs its why_us
+    field, or a resume's summary section vs an experience entry) — each
+    such call restarts chunk_index at 0, so without scope two different
+    fields that each fit in one chunk would collide onto the same ID and
+    silently overwrite each other on upsert.
     """
-    raw = f"{user_id}::{source_type}::{source_id}::{chunk_index}"
+    raw = f"{user_id}::{source_type}::{source_id}::{scope}::{chunk_index}"
     digest = hashlib.sha256(raw.encode()).digest()[:16]
     # Overlay UUID version 5 bits manually
     return uuid.UUID(bytes=digest, version=5)
+
+
+# base_payload keys that don't distinguish one chunk_text() call from
+# another against the same source (either constant across all calls for
+# that source, or already covered by source_id/source_type/chunk_index).
+_NON_DISTINGUISHING_PAYLOAD_KEYS = {
+    "user_id", "source_id", "source_type", "chunk_index", "token_count",
+    "template_id", "template_name", "resume_id",
+}
+
+
+def _scope_from_payload(base_payload: dict[str, Any] | None) -> str:
+    """Build a stable string from whatever distinguishing metadata the
+    caller put in base_payload (field_key, section, experience_index, ...)."""
+    if not base_payload:
+        return ""
+    return "|".join(
+        f"{k}={v}"
+        for k, v in sorted(base_payload.items())
+        if k not in _NON_DISTINGUISHING_PAYLOAD_KEYS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +152,7 @@ def chunk_text(
     chunks: list[TextChunk] = []
     start = 0
     chunk_index = 0
+    scope = _scope_from_payload(base_payload)
 
     while start < total_tokens:
         end = min(start + chunk_size, total_tokens)
@@ -136,13 +166,18 @@ def chunk_text(
             "source_type": source_type,
             "chunk_index": chunk_index,
             "token_count": len(chunk_tokens),
+            # The actual chunk text must live in the payload, not just on
+            # the TextChunk object — retrieval reads it back from Qdrant's
+            # stored payload, which otherwise has only metadata and no
+            # content to ground an answer on.
+            "text": chunk_text_str,
         }
         if base_payload:
             payload.update(base_payload)
 
         chunks.append(
             TextChunk(
-                chunk_id=_make_chunk_id(user_id, source_id, source_type, chunk_index),
+                chunk_id=_make_chunk_id(user_id, source_id, source_type, chunk_index, scope),
                 text=chunk_text_str,
                 token_count=len(chunk_tokens),
                 payload=payload,
@@ -275,6 +310,50 @@ def chunk_parsed_resume(
                     "education_index": i,
                     "institution": institution,
                 },
+            )
+        )
+
+    # ---- Projects (one chunk per project) -------------------------------
+    for i, proj in enumerate(parsed_json.get("projects", [])):
+        name = proj.get("name", "")
+        description = proj.get("description", "")
+        technologies = proj.get("technologies", [])
+        url = proj.get("url")
+
+        proj_text = f"Project — {name}:\n{description}"
+        if technologies:
+            proj_text += f"\nTechnologies: {', '.join(technologies)}"
+        if url:
+            proj_text += f"\nLink: {url}"
+
+        chunks.extend(
+            chunk_text(
+                text=proj_text,
+                user_id=user_id,
+                source_id=resume_id,
+                source_type="resume",
+                base_payload={
+                    **base_payload,
+                    "section": "projects",
+                    "project_index": i,
+                    "project_name": name,
+                },
+            )
+        )
+
+    # ---- Coding profiles -------------------------------------------------
+    coding_profiles: list[str] = parsed_json.get("coding_profiles", [])
+    if coding_profiles:
+        coding_text = "Coding / Competitive Programming Profiles:\n" + "\n".join(
+            f"- {p}" for p in coding_profiles
+        )
+        chunks.extend(
+            chunk_text(
+                text=coding_text,
+                user_id=user_id,
+                source_id=resume_id,
+                source_type="resume",
+                base_payload={**base_payload, "section": "coding_profiles"},
             )
         )
 

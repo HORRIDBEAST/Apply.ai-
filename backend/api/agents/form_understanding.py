@@ -65,7 +65,7 @@ CANONICAL_FIELD_MAP: dict[str, dict[str, Any]] = {
     "last_name":          {"patterns": [r"last.?name", r"lname", r"surname", r"family.?name"], "type": "text", "ai": False},
     "full_name":          {"patterns": [r"full.?name", r"^name$", r"candidate.?name"], "type": "text", "ai": False},
     "email":              {"patterns": [r"e.?mail", r"email.?address"], "type": "email", "ai": False},
-    "phone":              {"patterns": [r"phone", r"mobile", r"tel(?:ephone)?", r"cell"], "type": "phone", "ai": False},
+    "phone":              {"patterns": [r"phone", r"mobile", r"\btel(?:ephone)?\b", r"cell"], "type": "phone", "ai": False},
     "address":            {"patterns": [r"address", r"street"], "type": "text", "ai": False},
     "city":               {"patterns": [r"^city$", r"city.?name"], "type": "text", "ai": False},
     "state":              {"patterns": [r"^state$", r"province", r"region"], "type": "text", "ai": False},

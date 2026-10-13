@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.core.config import settings
 from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import QdrantHelper
-from backend.api.models.models import (
+from backend.api.db.models import (
     ApplicationAnswer,
     JobDescription,
     ParsedResumeData,

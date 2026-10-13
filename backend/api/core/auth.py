@@ -134,7 +134,7 @@ async def verify_clerk_token(
     """
     from backend.api.db.session import AsyncSessionLocal
     from sqlalchemy import select
-    from backend.api.models.models import User
+    from backend.api.db.models import User
 
     token = credentials.credentials
     jwks_data = await _fetch_jwks(redis)

@@ -396,14 +396,18 @@ class AnswerGenerationAgent:
         raw_content = (response.message.content or "").strip()
 
         # Token usage (may be None depending on provider)
+        # response.raw is the underlying openai-python ChatCompletion
+        # object — a Pydantic model, not a dict, so attribute access is
+        # required rather than .get().
         token_usage: dict[str, int] = {}
         if hasattr(response, "raw") and response.raw:
-            usage = response.raw.get("usage", {})
-            token_usage = {
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            }
+            usage = getattr(response.raw, "usage", None)
+            if usage is not None:
+                token_usage = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(usage, "completion_tokens", 0),
+                    "total_tokens": getattr(usage, "total_tokens", 0),
+                }
 
         # Strip markdown fences
         raw_content = re.sub(r"^```(?:json)?", "", raw_content).strip()

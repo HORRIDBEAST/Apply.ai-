@@ -72,12 +72,25 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for unexpected exceptions — log full traceback."""
     rid = _get_request_id(request)
-    logger.exception(
+
+    # Some exceptions (e.g. FastAPI's ResponseValidationError when the
+    # offending value can't be repr'd) raise again from their own __str__,
+    # which would otherwise swallow the real cause here. Pull out whatever
+    # diagnostic detail we safely can instead of relying on str(exc).
+    exc_type = type(exc).__name__
+    try:
+        exc_errors = exc.errors() if hasattr(exc, "errors") else None
+    except Exception:
+        exc_errors = "<errors() also failed>"
+
+    logger.error(
         "Unhandled exception",
         request_id=rid,
         path=str(request.url),
-        exc_info=exc,
+        exc_type=exc_type,
+        exc_errors=exc_errors,
     )
+    logger.exception("Unhandled exception traceback", request_id=rid)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=_error_body(

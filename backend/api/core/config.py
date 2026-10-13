@@ -141,11 +141,29 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 512           # tokens per chunk
     CHUNK_OVERLAP: int = 64         # token overlap between adjacent chunks
     RAG_TOP_K: int = 6              # top-K chunks retrieved per query
-    RAG_SIMILARITY_THRESHOLD: float = 0.72  # minimum cosine similarity to include
+    # Empirically, text-embedding-3-small scores a strong question↔answer
+    # match (e.g. "why do you want to work here" vs. the actual why_us
+    # template answer) around 0.40-0.50 cosine similarity — it rarely
+    # exceeds 0.6 even for ideal matches, since the model isn't tuned for
+    # asymmetric question/passage retrieval. 0.72 was unreachable in
+    # practice and caused every request to refuse for lack of context.
+    # Broader, vaguer questions ("tell us about yourself", "write a cover
+    # letter") score even lower against genuinely relevant resume bullets
+    # (0.25-0.30) than narrow ones ("describe a technical challenge",
+    # ~0.35) — the question's vagueness, not the content's irrelevance,
+    # drives the low score. 0.35 still excluded clearly-relevant resume
+    # content for these; lowered further so real experience/skills chunks
+    # aren't dropped just because the question was broadly phrased.
+    RAG_SIMILARITY_THRESHOLD: float = 0.22  # minimum cosine similarity to include
 
     # Token budget guards
     MAX_CONTEXT_TOKENS: int = 12_000   # max tokens injected into answer gen prompt
     MAX_ANSWER_TOKENS: int = 800       # max tokens in a single generated answer
+    # Full structured JSON extraction of a dense multi-job, multi-project
+    # resume needs far more output room than a short generated answer —
+    # using MAX_ANSWER_TOKENS here truncated the LLM's JSON mid-string on
+    # real-world resumes, silently producing an empty ParsedResume.
+    MAX_RESUME_EXTRACTION_TOKENS: int = 4000
 
     # ------------------------------------------------------------------
     # Celery (async task queue)

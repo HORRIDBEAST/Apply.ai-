@@ -21,7 +21,7 @@ from datetime import datetime
 import boto3
 from botocore.config import Config as BotoConfig
 from celery import Celery
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,7 @@ from backend.api.core.config import settings
 from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import QdrantHelper, get_qdrant
 from backend.api.db.session import get_db
-from backend.api.models.models import ParsedResumeData, Resume
+from backend.api.db.models import ParsedResumeData, Resume
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -94,7 +94,6 @@ def _encrypt_and_upload(
         Key=s3_key,
         Body=payload,
         ContentType="application/octet-stream",
-        ServerSideEncryption="AES256",  # additional S3-layer encryption
         Metadata={"content_hash": content_hash},
     )
 
@@ -126,8 +125,9 @@ class ResumeDetailResponse(ResumeMetaResponse):
 
 @router.post("/upload", response_model=ResumeMetaResponse, status_code=status.HTTP_201_CREATED)
 async def upload_resume(
+    current_user: AuthenticatedUser,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    current_user: AuthenticatedUser = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> Resume:
     """
@@ -200,10 +200,19 @@ async def upload_resume(
     await db.commit()
     await db.refresh(resume)
 
-    # 7. Dispatch async parse task (Celery)
-    # Imported here to avoid circular imports at module level
-    from backend.api.workers.tasks import parse_resume_task  # noqa: PLC0415
-    parse_resume_task.delay(str(resume_id), current_user.user_id)
+    # 7. Dispatch async parse task
+    # Imported here to avoid circular imports at module level.
+    # Celery doesn't reliably run on Windows dev machines (task dispatch
+    # silently hangs regardless of pool type) — in development, run the
+    # same pipeline via FastAPI's BackgroundTasks instead. Production
+    # (Linux) keeps using Celery for proper retry/backoff and horizontal
+    # scaling of worker processes.
+    if settings.APP_ENV == "development":
+        from backend.api.workers.tasks import parse_resume_async  # noqa: PLC0415
+        background_tasks.add_task(parse_resume_async, str(resume_id), current_user.user_id)
+    else:
+        from backend.api.workers.tasks import parse_resume_task  # noqa: PLC0415
+        parse_resume_task.delay(str(resume_id), current_user.user_id)
 
     logger.info(
         "Resume uploaded and parse task dispatched",

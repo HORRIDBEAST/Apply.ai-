@@ -11,7 +11,6 @@ Provides:
 Connection pool is tuned for production load (100k users, high concurrency).
 """
 
-import os
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -21,7 +20,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
-DATABASE_URL: str = os.environ["DATABASE_URL"]
+from backend.api.core.config import settings
+
+DATABASE_URL: str = settings.DATABASE_URL
 # e.g. postgresql+asyncpg://user:pass@localhost:5432/autofill_db
 
 # ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ async_engine = create_async_engine(
     pool_recycle=1800,      # recycle connections every 30 min (avoids stale TCP)
     pool_pre_ping=True,     # send a ping before reusing a connection
     # Echo SQL in development only
-    echo=os.environ.get("APP_ENV", "production") == "development",
+    echo=settings.APP_ENV == "development",
     echo_pool=False,
 )
 

@@ -232,10 +232,19 @@ curl -s http://localhost:9000/minio/health/live
 
 ### 6. Run database migrations
 
+`alembic.ini` lives at `backend/api/alembic.ini`, and its `env.py` uses
+relative imports (`db.base`, `db.models`) that only resolve when your
+working directory is `backend/api`. Run migrations from there, not the
+project root:
+
 ```bash
-# From project root
+cd backend/api
 alembic upgrade head
+cd ../..
 ```
+
+Also note: `docker-compose.yml` maps Postgres to **host port 5433** (not
+5432), so `DATABASE_URL` in your root `.env` must use `:5433`.
 
 Verify all 9 tables were created:
 
@@ -249,9 +258,21 @@ You should see: `ai_generated_answers`, `application_answers`, `applications`, `
 
 **Terminal 1 — FastAPI:**
 
+Every module in this codebase uses absolute imports rooted at the project
+directory (`from backend.api.core.config import settings`, etc.), so `backend`
+must be importable as a top-level package. That only works if your **working
+directory is the project root** — not `backend/`, even if your venv physically
+lives inside `backend/venv`. Activating a venv from a different folder than
+the one you `cd`'d into is fine; what matters is where you stand when you run
+`uvicorn`:
+
 ```bash
-# From project root, with venv active
+# From project root (even if venv is backend/venv, activate it with a
+# relative/absolute path from here — do NOT cd into backend/ first)
 uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+docker compose -f infrastructure/docker/docker-compose.yml ps
+
 ```
 
 Expected output:
@@ -267,8 +288,14 @@ INFO: Uvicorn running on http://0.0.0.0:8000
 celery -A backend.api.workers.tasks.celery_app worker \
   --loglevel=info \
   --queues=parsing,ingestion,default \
-  --concurrency=2
+  --concurrency=2 \
+  --pool=solo
 ```
+
+`--pool=solo` is required on Windows — Celery's default `prefork` pool relies
+on `os.fork()`, which doesn't exist on Windows and crashes the worker on
+startup. `solo` runs tasks in the same process, one at a time; fine for local
+dev. Omit it on Mac/Linux, where prefork works normally.
 
 ### 8. Verify the API is running
 
@@ -287,7 +314,8 @@ http://localhost:8000/docs
 
 ## Testing with Postman
 
-Import both files from `backend/tests/`:
+Import both files from the **project root** (not `backend/tests/` — that's
+where this doc originally pointed, but they actually live at the repo root):
 - `Job_Autofill_Copilot.postman_collection.json`
 - `Job_Autofill_Copilot_Local.postman_environment.json`
 
@@ -393,6 +421,77 @@ alembic downgrade base && alembic upgrade head
 ---
 
 ## Troubleshooting
+
+### Bugs found and fixed while first booting this backend (2026-09-30)
+
+The backend as originally committed could not start at all — the app and
+`pytest` both crashed on import. These are already fixed in the code; this
+log exists so that if you ever see the same traceback again (e.g. after
+reverting a commit, or copying an older version of a file), you know exactly
+what's wrong and why.
+
+1. **`ModuleNotFoundError: No module named 'backend'`**
+   Cause: `uvicorn`/`alembic` run from the wrong working directory. Every
+   file in `backend/api/` imports things like
+   `from backend.api.core.config import settings` — an absolute import that
+   only resolves when the **project root** is on `sys.path`, which only
+   happens when you run the command *from the project root*. Running from
+   inside `backend/` (even with `api.main:app` instead of `backend.api.main:app`)
+   fails the same way, because dozens of files internally still say
+   `backend.api.xxx`. Fix: always run `uvicorn`/`pytest` from the project
+   root; only `alembic` is the exception (see below).
+
+2. **`ModuleNotFoundError: No module named 'sentry_sdk'` (or any other package)**
+   Cause: not a code bug — the active venv in that terminal simply didn't
+   have `backend/requirements.txt` installed. This repo had *two* unrelated
+   venvs floating around (`backend/venv` and a global `myproject_env`); the
+   fix is just making sure the venv you activate is the one you installed
+   into. `where python` after activating tells you which one is live.
+
+3. **`from .resumes import router` → `ModuleNotFoundError`**
+   `backend/api/routers/__init__.py` imported a module named `resumes`
+   (plural) that doesn't exist — the real file is `resume.py` (singular).
+   Fixed the import. Same stray reference also existed in
+   `backend/api/workers/tasks.py` (`from backend.api.routers.resumes import _get_s3_client`).
+
+4. **`ModuleNotFoundError: No module named 'backend.api.models'`**
+   Six files (`core/auth.py`, `routers/applications.py`, `routers/resume.py`,
+   `routers/templates.py`, `routers/users.py`, `rag/ingestion.py`,
+   `workers/tasks.py`) and `backend/tests/conftest.py` imported ORM classes
+   from `backend.api.models.models` / `backend.api.models.base`. That
+   package never existed — the real files are `backend/api/db/models.py`
+   and `backend/api/db/base.py`. Fixed all 8 import sites.
+
+5. **`KeyError: 'DATABASE_URL'` on startup**
+   `backend/api/db/session.py` read `os.environ["DATABASE_URL"]` directly,
+   bypassing the `Settings` class entirely — but pydantic-settings loads
+   `.env` into the `Settings` object, not into the real process environment,
+   so this line raised even with a correctly filled-in `.env`. This also
+   violated this project's own documented convention ("all environment
+   variables go through `core/config.py`, never read `os.environ` directly").
+   Fixed to use `settings.DATABASE_URL` / `settings.APP_ENV`.
+
+6. **`AssertionError: Cannot specify Depends in Annotated and default value together`**
+   `routers/resume.py`'s `upload_resume` had
+   `current_user: AuthenticatedUser = Depends()`. `AuthenticatedUser` is
+   already `Annotated[CurrentUser, Depends(verify_clerk_token)]`, so adding
+   a second `Depends()` as the parameter default is redundant — newer
+   FastAPI versions reject this outright instead of silently accepting it.
+   Fixed by dropping the `= Depends()` and reordering the parameter (a
+   parameter with no default can't follow ones that have defaults in Python).
+
+7. **`httpx.ConnectError: [SSL: WRONG_VERSION_NUMBER]` connecting to Qdrant**
+   `backend/api/db/qdrant_client.py` instantiated `AsyncQdrantClient` with
+   an `api_key` but no explicit `https` flag. The `qdrant-client` library
+   assumes an API key means Qdrant Cloud and silently defaults to HTTPS,
+   which fails a TLS handshake against the local Docker Qdrant container
+   (which only serves plain HTTP). Fixed by passing `https=False` explicitly.
+
+8. **`KeyError: 'Cosine'` creating Qdrant collections**
+   `qmodels.Distance[settings.QDRANT_DISTANCE]` looks up an enum member by
+   **name** (`COSINE`), but `settings.QDRANT_DISTANCE` holds the enum's
+   **value** (`"Cosine"`). Fixed by switching to `qmodels.Distance(...)`
+   (value-based lookup) instead of `Distance[...]` (name-based lookup).
 
 **`ModuleNotFoundError: No module named 'backend'`**  
 Run uvicorn and alembic from the project root (`job-autofill-copilot/`), not from inside `backend/`.

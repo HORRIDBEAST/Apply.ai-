@@ -99,46 +99,35 @@ services:
 
   # ---------------------------------------------------------------------------
   # MinIO — S3-compatible object storage for encrypted resume files
+  #
+  # Official minio/minio and minio/mc images are blocked from free/anonymous
+  # pulls on both Docker Hub and quay.io (MinIO Inc. restricted distribution
+  # in 2024). Using Bitnami's community-maintained MinIO image instead, which
+  # remains freely pullable and is API-compatible. It also auto-creates
+  # buckets via MINIO_DEFAULT_BUCKETS, so the separate minio_init/mc service
+  # (which depended on the now-blocked minio/mc image) is no longer needed.
   # ---------------------------------------------------------------------------
   minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    # bitnami/minio was pulled from Docker Hub entirely (Broadcom's 2024
+    # catalog restructure); bitnamilegacy/minio is the frozen but still
+    # publicly pullable archive of the last free Bitnami build.
+    image: bitnamilegacy/minio:latest
     container_name: autofill_minio
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-autofill_minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_secret_key}
+      MINIO_DEFAULT_BUCKETS: "resumes,exports"
     ports:
       - "9000:9000"   # S3 API endpoint
       - "9001:9001"   # Web console
     volumes:
-      - minio_data:/data
+      - minio_data:/bitnami/minio/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 15s
       timeout: 5s
       retries: 5
-    networks:
-      - autofill_net
-
-  # ---------------------------------------------------------------------------
-  # MinIO Init — creates default buckets on first boot
-  # ---------------------------------------------------------------------------
-  minio_init:
-    image: minio/mc:latest
-    container_name: autofill_minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-autofill_minio} ${MINIO_ROOT_PASSWORD:-minio_secret_key};
-        mc mb --ignore-existing local/resumes;
-        mc mb --ignore-existing local/exports;
-        mc anonymous set none local/resumes;
-        mc anonymous set none local/exports;
-        echo 'MinIO buckets initialized.';
-      "
     networks:
       - autofill_net
 

@@ -38,7 +38,6 @@ import time
 from typing import Any
 
 from llama_index.core.llms import LLM
-from llama_index.core import Settings as LlamaSettings
 
 from backend.api.agents.base import (
     EducationEntry,
@@ -56,15 +55,44 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def _extract_text_from_pdf(data: bytes) -> str:
-    """Extract plain text from PDF bytes using pypdf."""
+    """
+    Extract plain text from PDF bytes using pypdf.
+
+    page.extract_text() only returns the visible text layer — it never
+    follows hyperlink annotations. Resumes commonly hyperlink a short
+    label ("GitHub", "LinkedIn", icon glyphs) to the real URL via an
+    invisible /URI link annotation, so the actual URL never appears in
+    the visible text at all. We separately walk each page's /Annots to
+    pull those real URLs out and append them, so the LLM has something
+    to extract github_url/linkedin_url/portfolio_url from instead of
+    guessing from garbled icon-font glyphs.
+    """
     import pypdf  # lazy import — not needed for non-PDF paths
 
     reader = pypdf.PdfReader(io.BytesIO(data))
     pages = []
+    all_links: list[str] = []
     for page in reader.pages:
         text = page.extract_text() or ""
         pages.append(text)
-    return "\n".join(pages)
+
+        annotations = page.get("/Annots")
+        if annotations:
+            for annot_ref in annotations:
+                try:
+                    annot = annot_ref.get_object()
+                    action = annot.get("/A")
+                    if action and "/URI" in action:
+                        uri = str(action["/URI"])
+                        if uri and uri not in all_links:
+                            all_links.append(uri)
+                except Exception:  # noqa: BLE001 — a malformed annotation shouldn't break extraction
+                    continue
+
+    full_text = "\n".join(pages)
+    if all_links:
+        full_text += "\n\nLinks found in document (from PDF hyperlinks):\n" + "\n".join(all_links)
+    return full_text
 
 
 def _extract_text_from_docx(data: bytes) -> str:
@@ -111,6 +139,10 @@ GROUND RULES — YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
 5. All dates should be formatted as strings exactly as they appear in the resume (e.g. "Jan 2021", "2020", "Present").
 6. The "skills" array must contain only skills explicitly mentioned in the resume text.
 7. Each experience entry description should be a factual summary of bullet points found in the resume.
+8. If the text includes a "Links found in document" section, those are real URLs recovered from the
+   PDF's hyperlink annotations (the visible label near them may be a garbled icon glyph, ignore that).
+   Match each URL to the right field by its domain: github.com → github_url, linkedin.com → linkedin_url,
+   any other personal/portfolio domain → portfolio_url. Prefer these over anything in the visible text.
 
 OUTPUT SCHEMA (JSON):
 {
@@ -142,8 +174,17 @@ OUTPUT SCHEMA (JSON):
       "gpa": "string or null"
     }
   ],
+  "projects": [
+    {
+      "name": "string — project title/name",
+      "description": "string — factual summary of what the project does and what was built, from the bullet points",
+      "technologies": ["array of technologies/frameworks explicitly mentioned for this project"],
+      "url": "string or null — GitHub repo or live demo URL if present"
+    }
+  ],
   "certifications": ["array of certification strings"],
-  "languages": ["array of language strings"]
+  "languages": ["array of language strings"],
+  "coding_profiles": ["array of competitive-programming / coding platform entries verbatim, e.g. 'CodeChef: 3-star coder (Rating: 1689)', 'LeetCode: Knight (Rating: 2005)' — one string per platform"]
 }
 """
 
@@ -229,7 +270,24 @@ class ResumeExtractorAgent:
 
     def __init__(self, llm: LLM | None = None) -> None:
         configure_llama_settings()
-        self._llm: LLM = llm or LlamaSettings.llm
+        if llm is not None:
+            self._llm: LLM = llm
+        else:
+            # Don't reuse the shared LlamaSettings.llm here — it's capped
+            # at MAX_ANSWER_TOKENS (800), sized for short generated answers.
+            # A full structured resume extraction needs a much larger
+            # output budget or the LLM's JSON gets truncated mid-string.
+            from llama_index.llms.openai import OpenAI as LlamaOpenAI  # noqa: PLC0415
+
+            self._llm = LlamaOpenAI(
+                model=settings.OPENAI_MODEL,
+                api_key=settings.OPENAI_API_KEY,
+                api_base=settings.OPENAI_BASE_URL,
+                temperature=0.0,
+                max_tokens=settings.MAX_RESUME_EXTRACTION_TOKENS,
+                timeout=60.0,
+                max_retries=3,
+            )
 
     async def extract(
         self,

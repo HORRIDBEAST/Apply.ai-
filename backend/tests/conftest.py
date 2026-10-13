@@ -53,7 +53,7 @@ def event_loop():
 
 @pytest_asyncio.fixture(scope="session")
 async def test_engine():
-    from backend.api.models.base import Base
+    from backend.api.db.base import Base
 
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:

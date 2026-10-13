@@ -87,6 +87,130 @@ def _run_async(coro):
 # Tasks
 # ---------------------------------------------------------------------------
 
+async def parse_resume_async(resume_id: str, user_id: str) -> dict:
+    """
+    Core resume parse pipeline, usable from either the Celery task below
+    or directly (e.g. FastAPI BackgroundTasks) when Celery isn't available.
+
+    Steps:
+      1. Download encrypted file from S3
+      2. Decrypt file
+      3. Call ResumeExtractorAgent to extract structured JSON
+      4. Save ParsedResumeData to PostgreSQL
+      5. Call ingest_resume() to embed + store in Qdrant
+      6. Update resume.parse_status = "complete"
+    """
+    from backend.api.db.session import AsyncSessionLocal
+    from backend.api.db.redis_client import init_redis_pool, close_redis_pool, get_redis
+    from backend.api.db.qdrant_client import init_qdrant_client, close_qdrant_client, get_qdrant
+    from backend.api.db.models import Resume, ParsedResumeData
+    from backend.api.rag.ingestion import ingest_resume
+    from sqlalchemy import select, update
+    import uuid
+
+    logger.info("parse_resume_task started", extra={"resume_id": resume_id})
+
+    # Initialise connections (each caller gets its own event loop)
+    await init_redis_pool()
+    await init_qdrant_client()
+
+    redis = await get_redis()
+    qdrant = await get_qdrant()
+
+    try:
+        async with AsyncSessionLocal() as db:
+            # Fetch resume record
+            result = await db.execute(
+                select(Resume).where(Resume.id == uuid.UUID(resume_id))
+            )
+            resume = result.scalar_one_or_none()
+            if not resume:
+                logger.error("Resume not found in parse task", extra={"resume_id": resume_id})
+                return {"status": "error", "reason": "resume_not_found"}
+
+            # Mark as processing
+            await db.execute(
+                update(Resume)
+                .where(Resume.id == uuid.UUID(resume_id))
+                .values(parse_status="processing")
+            )
+            await db.commit()
+
+            # --- Phase 1: Download + decrypt file from S3 ---
+            from backend.api.routers.resume import _get_s3_client  # noqa: PLC0415
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+            import base64  # noqa: PLC0415
+
+            s3 = _get_s3_client()
+            s3_obj = s3.get_object(Bucket=settings.S3_BUCKET_RESUMES, Key=resume.storage_key)
+            encrypted_payload = s3_obj["Body"].read()
+
+            nonce = encrypted_payload[:12]
+            ciphertext = encrypted_payload[12:]
+            key_bytes = base64.urlsafe_b64decode(settings.RESUME_ENCRYPTION_KEY + "==")
+            aesgcm = AESGCM(key_bytes)
+            plaintext_bytes = aesgcm.decrypt(
+                nonce, ciphertext,
+                associated_data=(resume.content_hash or "").encode(),
+            )
+
+            # --- Phase 2: Extract structured data via ResumeExtractorAgent ---
+            from backend.api.agents.resume_extractor import ResumeExtractorAgent  # noqa: PLC0415
+            agent = ResumeExtractorAgent()
+            parsed_json = await agent.extract(
+                file_bytes=plaintext_bytes,
+                mime_type=resume.mime_type,
+            )
+
+            # --- Phase 3: Save ParsedResumeData ---
+            existing_parsed = await db.execute(
+                select(ParsedResumeData).where(
+                    ParsedResumeData.resume_id == uuid.UUID(resume_id)
+                )
+            )
+            parsed_row = existing_parsed.scalar_one_or_none()
+
+            if parsed_row:
+                parsed_row.parsed_json = parsed_json
+                parsed_row.parse_status = "complete"
+            else:
+                parsed_row = ParsedResumeData(
+                    resume_id=uuid.UUID(resume_id),
+                    parsed_json=parsed_json,
+                    parser_model=settings.OPENAI_MODEL,
+                    parser_version="1.0",
+                )
+                db.add(parsed_row)
+
+            await db.commit()
+
+            # --- Phase 4: Ingest into Qdrant ---
+            await ingest_resume(
+                parsed_json=parsed_json,
+                resume_id=resume_id,
+                user_id=user_id,
+                db=db,
+                qdrant=qdrant,
+                redis=redis,
+                replace_existing=True,
+            )
+
+            # --- Phase 5: Mark as complete ---
+            await db.execute(
+                update(Resume)
+                .where(Resume.id == uuid.UUID(resume_id))
+                .values(parse_status="complete")
+            )
+            await db.commit()
+
+            logger.info("parse_resume_task complete", extra={"resume_id": resume_id})
+            return {"status": "complete", "resume_id": resume_id}
+
+    finally:
+        await close_redis_pool()
+        await close_qdrant_client()
+
+
 @celery_app.task(
     bind=True,
     name="backend.api.workers.tasks.parse_resume_task",
@@ -97,131 +221,9 @@ def _run_async(coro):
     retry_backoff_max=300,
 )
 def parse_resume_task(self, resume_id: str, user_id: str) -> dict:
-    """
-    Background task: parse a resume file and ingest into Qdrant.
-
-    Steps:
-      1. Download encrypted file from S3
-      2. Decrypt file
-      3. Call ResumeExtractorAgent to extract structured JSON
-      4. Save ParsedResumeData to PostgreSQL
-      5. Call ingest_resume() to embed + store in Qdrant
-      6. Update resume.parse_status = "complete"
-    """
+    """Celery task wrapper — see parse_resume_async() for the actual pipeline."""
     configure_logging()
-    logger.info("parse_resume_task started", extra={"resume_id": resume_id})
-
-    async def _run():
-        from backend.api.db.session import AsyncSessionLocal
-        from backend.api.db.redis_client import init_redis_pool, close_redis_pool, get_redis
-        from backend.api.db.qdrant_client import init_qdrant_client, close_qdrant_client, get_qdrant
-        from backend.api.models.models import Resume, ParsedResumeData
-        from backend.api.rag.ingestion import ingest_resume
-        from sqlalchemy import select, update
-        import uuid
-
-        # Initialise connections (each Celery worker has its own event loop)
-        await init_redis_pool()
-        await init_qdrant_client()
-
-        redis = await get_redis()
-        qdrant = await get_qdrant()
-
-        try:
-            async with AsyncSessionLocal() as db:
-                # Fetch resume record
-                result = await db.execute(
-                    select(Resume).where(Resume.id == uuid.UUID(resume_id))
-                )
-                resume = result.scalar_one_or_none()
-                if not resume:
-                    logger.error("Resume not found in parse task", extra={"resume_id": resume_id})
-                    return {"status": "error", "reason": "resume_not_found"}
-
-                # Mark as processing
-                await db.execute(
-                    update(Resume)
-                    .where(Resume.id == uuid.UUID(resume_id))
-                    .values(parse_status="processing")
-                )
-                await db.commit()
-
-                # --- Phase 1: Download + decrypt file from S3 ---
-                from backend.api.routers.resumes import _get_s3_client  # noqa: PLC0415
-                from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
-                import base64  # noqa: PLC0415
-
-                s3 = _get_s3_client()
-                s3_obj = s3.get_object(Bucket=settings.S3_BUCKET_RESUMES, Key=resume.storage_key)
-                encrypted_payload = s3_obj["Body"].read()
-
-                nonce = encrypted_payload[:12]
-                ciphertext = encrypted_payload[12:]
-                key_bytes = base64.urlsafe_b64decode(settings.RESUME_ENCRYPTION_KEY + "==")
-                aesgcm = AESGCM(key_bytes)
-                plaintext_bytes = aesgcm.decrypt(
-                    nonce, ciphertext,
-                    associated_data=(resume.content_hash or "").encode(),
-                )
-
-                # --- Phase 2: Extract structured data via ResumeExtractorAgent ---
-                # (Agent is defined in backend/agents/resume_extractor.py — Step 3)
-                from backend.agents.resume_extractor import ResumeExtractorAgent  # noqa: PLC0415
-                agent = ResumeExtractorAgent()
-                parsed_json = await agent.extract(
-                    file_bytes=plaintext_bytes,
-                    mime_type=resume.mime_type,
-                )
-
-                # --- Phase 3: Save ParsedResumeData ---
-                existing_parsed = await db.execute(
-                    select(ParsedResumeData).where(
-                        ParsedResumeData.resume_id == uuid.UUID(resume_id)
-                    )
-                )
-                parsed_row = existing_parsed.scalar_one_or_none()
-
-                if parsed_row:
-                    parsed_row.parsed_json = parsed_json
-                    parsed_row.parse_status = "complete"
-                else:
-                    parsed_row = ParsedResumeData(
-                        resume_id=uuid.UUID(resume_id),
-                        parsed_json=parsed_json,
-                        parser_model=settings.OPENAI_MODEL,
-                        parser_version="1.0",
-                    )
-                    db.add(parsed_row)
-
-                await db.commit()
-
-                # --- Phase 4: Ingest into Qdrant ---
-                await ingest_resume(
-                    parsed_json=parsed_json,
-                    resume_id=resume_id,
-                    user_id=user_id,
-                    db=db,
-                    qdrant=qdrant,
-                    redis=redis,
-                    replace_existing=True,
-                )
-
-                # --- Phase 5: Mark as complete ---
-                await db.execute(
-                    update(Resume)
-                    .where(Resume.id == uuid.UUID(resume_id))
-                    .values(parse_status="complete")
-                )
-                await db.commit()
-
-                logger.info("parse_resume_task complete", extra={"resume_id": resume_id})
-                return {"status": "complete", "resume_id": resume_id}
-
-        finally:
-            await close_redis_pool()
-            await close_qdrant_client()
-
-    return _run_async(_run())
+    return _run_async(parse_resume_async(resume_id, user_id))
 
 
 @celery_app.task(

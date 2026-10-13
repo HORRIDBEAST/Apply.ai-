@@ -27,7 +27,7 @@ from backend.api.core.logging import get_logger
 from backend.api.db.qdrant_client import QdrantHelper, get_qdrant
 from backend.api.db.redis_client import get_redis
 from backend.api.db.session import get_db
-from backend.api.models.models import Template
+from backend.api.db.models import Template
 from backend.api.rag.ingestion import ingest_template
 
 logger = get_logger(__name__)
@@ -111,7 +111,13 @@ async def create_template(
     )
 
     logger.info("Template created", template_id=str(template.id), user_id=current_user.user_id)
-    return template
+    # ingest_template()'s bulk UPDATE sets updated_at via a server-side
+    # now() — SQLAlchemy can't evaluate that client-side, so it expires
+    # that column on this in-memory object. Refresh before building the
+    # response so Pydantic never tries to lazily reload an expired
+    # attribute outside of an active async DB call (MissingGreenlet).
+    await db.refresh(template)
+    return TemplateResponse.model_validate(template)
 
 
 @router.get("/", response_model=list[TemplateResponse])
@@ -186,7 +192,8 @@ async def update_template(
         redis=redis,
         replace_existing=True,
     )
-    return t
+    await db.refresh(t)
+    return TemplateResponse.model_validate(t)
 
 
 @router.post("/{template_id}/set-default", response_model=TemplateResponse)
@@ -233,10 +240,10 @@ async def delete_template(
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
 
+    from backend.api.core.config import settings  # noqa: PLC0415
     await QdrantHelper.delete_by_source_id(
         qdrant, settings.QDRANT_COLLECTION_TEMPLATES,
         source_field="template_id", source_id=str(template_id),
     )
-    from backend.api.core.config import settings  # noqa: PLC0415
     await db.delete(t)
     await db.commit()
