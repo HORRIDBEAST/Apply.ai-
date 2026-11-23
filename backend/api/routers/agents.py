@@ -36,6 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.agents.answer_generation import AnswerGenerationAgent
@@ -44,11 +45,14 @@ from backend.api.agents.base import (
     FormUnderstandingResult,
     GeneratedAnswer,
     MemorySearchResult,
+    ResumeScoreResult,
 )
 from backend.api.agents.form_understanding import FormUnderstandingAgent
+from backend.api.agents.resume_scoring import ResumeScoringAgent
 from backend.api.core.auth import AuthenticatedUser
 from backend.api.core.config import settings
 from backend.api.core.logging import get_logger
+from backend.api.db.models import JobDescription, ParsedResumeData, Resume
 from backend.api.db.qdrant_client import get_qdrant
 from backend.api.db.redis_client import get_redis
 from backend.api.db.session import get_db
@@ -64,6 +68,7 @@ router = APIRouter()
 _form_agent = FormUnderstandingAgent()
 _answer_agent = AnswerGenerationAgent()
 _memory_agent = ApplicationMemoryAgent()
+_scoring_agent = ResumeScoringAgent()
 
 
 # ===========================================================================
@@ -389,3 +394,63 @@ async def record_memory(
         redis=redis,
     )
     return RecordAnswerResponse(status="recorded", point_ids=point_ids)
+
+
+# ===========================================================================
+# 6. ResumeScoringAgent — resume-to-JD match score
+#
+# STATUS: implemented ahead of its frontend — see frontend_context.md §5.
+# No UI calls this endpoint yet; it's "option B" groundwork for the
+# extension's future "Resume Score" tab and the website's future
+# "Tailor Resume" feature.
+# ===========================================================================
+
+class ResumeScoreRequest(BaseModel):
+    resume_id: uuid.UUID
+    job_description_id: uuid.UUID
+
+
+@router.post(
+    "/resume/score",
+    response_model=ResumeScoreResult,
+    summary="Score a resume's match against a job description",
+    description=(
+        "Compares a parsed resume against a stored job description and returns "
+        "an overall match score plus matched/missing skills. Not yet called by "
+        "any frontend — groundwork for a future Resume Score / Tailor Resume feature."
+    ),
+)
+async def score_resume(
+    body: ResumeScoreRequest,
+    current_user: AuthenticatedUser,
+    db: AsyncSession = Depends(get_db),
+) -> ResumeScoreResult:
+    user_uuid = uuid.UUID(current_user.user_id)
+
+    resume_result = await db.execute(
+        select(Resume).where(Resume.id == body.resume_id, Resume.user_id == user_uuid)
+    )
+    if resume_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
+
+    parsed_result = await db.execute(
+        select(ParsedResumeData).where(ParsedResumeData.resume_id == body.resume_id)
+    )
+    parsed = parsed_result.scalar_one_or_none()
+    if parsed is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resume has not finished parsing yet",
+        )
+
+    jd_result = await db.execute(
+        select(JobDescription).where(
+            JobDescription.id == body.job_description_id,
+            JobDescription.user_id == user_uuid,
+        )
+    )
+    jd = jd_result.scalar_one_or_none()
+    if jd is None or not jd.raw_text:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job description not found")
+
+    return await _scoring_agent.score(resume_json=parsed.parsed_json, jd_text=jd.raw_text)

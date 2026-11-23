@@ -14,7 +14,8 @@ Upload your résumé once, write your standard answers, and let the system detec
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?style=flat-square&logo=openai&logoColor=white)](https://platform.openai.com)
 [![Plasmo](https://img.shields.io/badge/Plasmo-extension-7C3AED?style=flat-square)](https://plasmo.com)
 [![Backend](https://img.shields.io/badge/backend-tested%20%26%20working-22c55e?style=flat-square)]()
-[![Extension](https://img.shields.io/badge/extension-in%20progress-f59e0b?style=flat-square)]()
+[![Website](https://img.shields.io/badge/website-builds%20%26%20wired-22c55e?style=flat-square)]()
+[![Extension](https://img.shields.io/badge/extension-builds%20%26%20wired-22c55e?style=flat-square)]()
 
 </div>
 
@@ -29,7 +30,8 @@ Upload your résumé once, write your standard answers, and let the system detec
 | 🧠 **AI answer generation** | `AnswerGenerationAgent` retrieves context from your résumé, templates, job description, and past answers via Qdrant RAG, then generates grounded answers — refusing to answer rather than hallucinating when context is insufficient. |
 | 🔁 **Application memory** | Every submitted answer is embedded and stored in Qdrant. Future applications retrieve similar past answers as context, improving over time. |
 | 📊 **Application history** | Every form session is tracked in PostgreSQL with status, platform, field counts, and all answers with their source and confidence score. |
-| 🧷 **Browser extension** | Plasmo + TypeScript extension that scans the DOM, sends HTML to the backend, receives field mappings and AI answers, and injects them into the live page *(built, not yet connected end-to-end with auth)*. |
+| 🧷 **Browser extension** | Plasmo + TypeScript extension that scans the DOM, sends HTML to the backend, receives field mappings and AI answers, and injects them into the live page. Builds clean and is wired to the real backend *(not yet verified against a live job page — see "What is not yet built")*. |
+| 🌐 **Web dashboard** | Next.js app for managing resumes, templates, applications, and semantic memory search — builds clean, wired to the real backend. |
 
 ## 🏗️ Architecture
 
@@ -373,6 +375,61 @@ curl http://localhost:8000/api/v1/health/ready
 Interactive API docs (dev mode only):  
 http://localhost:8000/docs
 
+### 9. Start the frontend (website + extension)
+
+Both live in `apps/` as separate npm projects (no monorepo workspace wired
+up yet — `cd` into each and `npm install` once before first run). Both need
+the backend from step 7 running first.
+
+**Website (Next.js) — Terminal 3:**
+
+```bash
+cd apps/web
+npm install   # first time only
+npm run dev
+```
+
+Opens at http://localhost:3000, hot-reloads on save. `Ctrl+C` to stop.
+
+**Extension (Plasmo) — Terminal 4:**
+
+```bash
+cd apps/extension
+npm install   # first time only
+npm run dev
+```
+
+Builds (and keeps rebuilding on save) to `apps/extension/build/chrome-mv3-dev`.
+Then, **one-time setup in Chrome**:
+
+1. Go to `chrome://extensions`
+2. Toggle **Developer mode** on (top right)
+3. Click **Load unpacked**
+4. Select `apps/extension/build/chrome-mv3-dev`
+5. It appears as **"DEV | Job Autofill Copilot"** — pin it to the toolbar
+
+You only do the "Load unpacked" step once. While `npm run dev` keeps running,
+Plasmo hot-reloads the already-loaded extension automatically — just refresh
+the popup/side panel after a code change, no need to reload the unpacked
+extension again.
+
+**Sign-in order matters**: sign in on the `localhost:3000` tab *before*
+opening the extension popup — the extension's Clerk session is synced from
+that origin (`externally_connectable` / `syncHost`), so without an active
+website session the extension shows signed-out.
+
+**Gotcha**: the content script (`apps/extension/src/contents/scanner.ts`)
+only auto-injects into tabs that load *after* the extension is loaded. If a
+job-application tab was already open, reload it before testing Autofill.
+
+**Note on auth right now**: `MOCK_AUTH_BYPASS=true` is set in the root
+`.env`, so the backend accepts any request regardless of whether the
+attached Clerk JWT actually verifies — this lets the full website/extension
+UI and business logic be tested genuinely end-to-end today, independent of
+the still-unresolved real-Clerk-JWT-verification issue (see
+`frontend_context.md` and the `project_clerk_auth_blocked` memory for that
+separate, deferred item). Flip it to `false` once that's resolved.
+
 ---
 
 ## 🧪 Testing with Postman
@@ -445,9 +502,19 @@ alembic downgrade base && alembic upgrade head
 
 ## 🚧 What is not yet built
 
-- Web dashboard (Next.js) — application history UI, resume upload UI, template editor
-- Browser extension auth flow — Clerk sign-in inside the popup
-- Extension ↔ backend end-to-end wiring with real auth tokens
+Both `apps/web` (Next.js) and `apps/extension` (Plasmo) now exist, build
+clean, and are wired against the real backend endpoints — see
+`frontend_context.md` for the full build log and scope decisions. Still
+outstanding:
+
+- Real Clerk JWT verification end-to-end (currently bypassed locally via
+  `MOCK_AUTH_BYPASS=true` — see `project_clerk_auth_blocked` memory)
+- Live-browser verification of the extension's Autofill pipeline against a
+  real ATS form (built against the documented API shape, never run against
+  a live job page yet)
+- Resume Score tab (extension) / Tailor Resume — backend exists
+  (`POST /agents/resume/score`, `job-descriptions` router) but isn't wired
+  to any UI yet, intentionally, for a future release
 - Job description auto-extraction pipeline (endpoint exists, scraper not wired)
 - Email/Slack notifications on application status change
 - Usage analytics and cost tracking dashboard
@@ -461,6 +528,8 @@ alembic downgrade base && alembic upgrade head
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | ✅ | Powers all AI agents and embeddings |
 | `CLERK_SECRET_KEY` | ✅ | JWT verification for all API requests |
+| `CLERK_PUBLISHABLE_KEY` | ✅ | Used by both `apps/web` and `apps/extension` for real Clerk sign-in |
+| `MOCK_AUTH_BYPASS` | ❌ | Default `false`. Set `true` to bypass real Clerk JWT verification with a fixed mock user — see the frontend setup section above |
 | `RESUME_ENCRYPTION_KEY` | ✅ | AES-256 key for resume file encryption |
 | `DATABASE_URL` | ✅ | PostgreSQL async connection string |
 | `REDIS_URL` | ✅ | Redis connection (cache + Celery broker) |

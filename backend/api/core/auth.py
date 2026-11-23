@@ -33,8 +33,10 @@ from backend.api.db.redis_client import get_redis
 
 logger = get_logger(__name__)
 
-# Clerk JWKS endpoint (contains RSA public keys for JWT verification)
-_CLERK_JWKS_URL = "https://api.clerk.dev/v1/jwks"
+# Clerk JWKS endpoint (contains RSA public keys for JWT verification).
+# api.clerk.com requires the secret key as a Bearer token on this call —
+# the older unauthenticated api.clerk.dev domain is deprecated.
+_CLERK_JWKS_URL = "https://api.clerk.com/v1/jwks"
 _JWKS_CACHE_KEY = "clerk:jwks"
 _JWKS_CACHE_TTL = 3600  # 1 hour
 
@@ -60,7 +62,10 @@ async def _fetch_jwks(redis) -> dict:
         return json.loads(cached)
 
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(_CLERK_JWKS_URL)
+        resp = await client.get(
+            _CLERK_JWKS_URL,
+            headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
+        )
         resp.raise_for_status()
         jwks_data = resp.json()
 

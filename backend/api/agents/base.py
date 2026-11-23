@@ -208,3 +208,23 @@ class MemorySearchResult(BaseModel):
     """Output of ApplicationMemoryAgent.search()."""
     similar_answers: list[SimilarAnswer] = Field(default_factory=list)
     total_found: int = 0
+
+
+# ── ResumeScoringAgent output ────────────────────────────────────────────────
+# NOTE: this agent and its endpoint exist but are not yet wired into any
+# frontend UI — see frontend_context.md §5 ("option B" groundwork, shipped
+# ahead of the UI that will eventually call it).
+
+class ResumeScoreResult(BaseModel):
+    """
+    Full output of ResumeScoringAgent.score() — how well a resume matches
+    a specific job description.
+    """
+    overall_score: float = Field(ge=0.0, le=100.0, description="Overall match score, 0-100")
+    matched_skills: list[str] = Field(default_factory=list, description="Skills present in both the resume and the JD")
+    missing_skills: list[str] = Field(default_factory=list, description="Skills the JD asks for that the resume doesn't show")
+    strengths: list[str] = Field(default_factory=list, description="Concrete resume points that align well with the JD")
+    gaps: list[str] = Field(default_factory=list, description="Concrete JD requirements the resume doesn't address")
+    summary: str = ""
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    latency_ms: int = 0

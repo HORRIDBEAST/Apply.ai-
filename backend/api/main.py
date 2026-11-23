@@ -186,9 +186,11 @@ app = create_app()
 
 # ---------------------------------------------------------------------------
 # LOCAL TESTING ONLY — bypasses Clerk JWT verification.
-# Remove this block before deploying anywhere real auth is required.
+# Gated behind MOCK_AUTH_BYPASS (default False) so real Clerk JWTs are
+# verified by default. Set MOCK_AUTH_BYPASS=true in .env to re-enable
+# the mock user shortcut for quick business-logic testing without Clerk.
 # ---------------------------------------------------------------------------
-if settings.APP_ENV == "development":
+if settings.APP_ENV == "development" and settings.MOCK_AUTH_BYPASS:
     from backend.api.core.auth import verify_clerk_token, CurrentUser
 
     async def _mock_auth() -> CurrentUser:

@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     CLERK_PUBLISHABLE_KEY: str = ""
     CLERK_WEBHOOK_SECRET: str = ""
 
+    # Opt-in switch to bypass real Clerk verification with a mock user.
+    # Defaults to False so real JWTs are verified even in development —
+    # set MOCK_AUTH_BYPASS=true in .env only when you want the old
+    # no-auth shortcut back (e.g. testing business logic without Clerk).
+    MOCK_AUTH_BYPASS: bool = False
+
     # ------------------------------------------------------------------
     # AI / LLM
     # ------------------------------------------------------------------
